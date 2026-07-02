@@ -165,6 +165,7 @@ export class PostgresObservationRepository {
     query: string;
     limit?: number;
     platformSource?: string | null;
+    actorId?: string | null;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
     const result = await this.client.query<ObservationRow>(
@@ -177,6 +178,7 @@ export class PostgresObservationRepository {
         WHERE observations.project_id = $1
           AND observations.team_id = $2
           AND observations.content_search @@ websearch_to_tsquery('english', $3)
+          AND ($6::text IS NULL OR observations.actor_id = $6)
           AND (
             $5::text IS NULL
             OR server_sessions.platform_source = $5
@@ -198,7 +200,7 @@ export class PostgresObservationRepository {
         ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC, observations.updated_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource]
+      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource, input.actorId ?? null]
     );
     return result.rows.map(mapObservationRow);
   }

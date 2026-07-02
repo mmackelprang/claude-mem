@@ -929,6 +929,8 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             kind: body.kind ?? 'manual',
             content: body.content,
             metadata: body.metadata ?? {},
+            actorId: await this.resolveActorId(req),
+            apiKeyId: req.authContext?.apiKeyId ?? null,
           });
           await this.auditWrite(req, 'memory.write', observation.id, observation.projectId);
           res.status(201).json({ memory: serializeObservation(observation) });
@@ -948,6 +950,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         query: z.string().min(1),
         limit: z.number().int().positive().max(100).optional(),
         platformSource: z.string().min(1).nullable().optional(),
+        actorId: z.string().min(1).nullable().optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -962,12 +965,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 20,
             platformSource,
+            actorId: body.actorId ?? null,
           });
           await this.auditRead(req, 'observation.read', null, body.projectId, {
             mode: 'search',
             query: body.query,
             limit: body.limit ?? 20,
             platformSource,
+            actorId: body.actorId ?? null,
             resultCount: results.length,
             observationIds: results.map(o => o.id),
           });
@@ -990,6 +995,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         query: z.string().min(1),
         limit: z.number().int().positive().max(50).optional(),
         platformSource: z.string().min(1).nullable().optional(),
+        actorId: z.string().min(1).nullable().optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -1004,6 +1010,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 10,
             platformSource,
+            actorId: body.actorId ?? null,
           });
           const context = results
             .map(observation => observation.content)
@@ -1014,6 +1021,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 10,
             platformSource,
+            actorId: body.actorId ?? null,
             resultCount: results.length,
             observationIds: results.map(o => o.id),
           });
@@ -1954,6 +1962,7 @@ function serializeObservation(observation: {
   kind: string;
   content: string;
   metadata: Record<string, unknown>;
+  actorId: string | null;
   createdAtEpoch: number;
   updatedAtEpoch: number;
 }): Record<string, unknown> {
@@ -1965,6 +1974,7 @@ function serializeObservation(observation: {
     kind: observation.kind,
     content: observation.content,
     metadata: observation.metadata,
+    actorId: observation.actorId,
     createdAtEpoch: observation.createdAtEpoch,
     updatedAtEpoch: observation.updatedAtEpoch,
   };
