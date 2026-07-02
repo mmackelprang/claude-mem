@@ -331,6 +331,52 @@ function checkPackageCompleteness(failures) {
       log(`  Loaded ${entry.label} cleanly (no missing module).`);
     }
   }
+
+  return pkgRoot;
+}
+
+// ---------------------------------------------------------------------------
+// PART 3 — plugin relative-require closure (the #3091/#3092/#3107 guard)
+// ---------------------------------------------------------------------------
+// The worker reaches SessionStore via a lazy
+// createRequire('../sqlite/SessionStore.js') that fires only on the first
+// observation/backfill — never during the `--version` boots PART 1/2 do, so
+// those parts cannot catch a missing sibling. Statically assert every relative
+// require target inside the PACKED plugin/scripts/*.cjs resolves inside the
+// tarball. This is the guard that would have caught 13.9.x shipping without
+// plugin/sqlite/.
+function checkPluginRelativeRequires(failures, pkgRoot) {
+  log('\nPART 3 — plugin relative-require closure (#3091/#3092/#3107 guard)');
+
+  const scriptsDir = path.join(pkgRoot, 'plugin', 'scripts');
+  if (!fs.existsSync(scriptsDir)) {
+    failures.push(`packed tarball is missing plugin/scripts (${scriptsDir})`);
+    return;
+  }
+
+  const RELATIVE_SPECIFIER = /["'](\.\.?\/[A-Za-z0-9_./-]+\.(?:c?js))["']/g;
+  let checked = 0;
+  for (const entry of fs.readdirSync(scriptsDir)) {
+    if (!entry.endsWith('.cjs')) continue;
+    const filePath = path.join(scriptsDir, entry);
+    const content = fs.readFileSync(filePath, 'utf8');
+    const seen = new Set();
+    let m;
+    while ((m = RELATIVE_SPECIFIER.exec(content)) !== null) {
+      const spec = m[1];
+      if (seen.has(spec)) continue;
+      seen.add(spec);
+      checked++;
+      const resolved = path.resolve(path.dirname(filePath), spec);
+      if (!fs.existsSync(resolved)) {
+        failures.push(
+          `published plugin/scripts/${entry} requires "${spec}" but it is ` +
+            `absent from the tarball (would throw MODULE_NOT_FOUND at runtime)`
+        );
+      }
+    }
+  }
+  log(`  Checked ${checked} relative require target(s) across plugin/scripts/*.cjs.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +388,8 @@ function main() {
 
   try {
     checkPluginClosure(failures);
-    checkPackageCompleteness(failures);
+    const pkgRoot = checkPackageCompleteness(failures);
+    if (pkgRoot) checkPluginRelativeRequires(failures, pkgRoot);
   } finally {
     rmrf(cleanup.tmpPlugin);
     rmrf(cleanup.tmpPkg);
