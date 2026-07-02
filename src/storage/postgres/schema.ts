@@ -2,7 +2,7 @@
 
 import type { PostgresQueryable } from './utils.js';
 
-export const SERVER_POSTGRES_SCHEMA_VERSION = 1;
+export const SERVER_POSTGRES_SCHEMA_VERSION = 2;
 
 // Phase 1b (cmem-sdk rename): the TS constant is renamed but the table-name
 // strings remain on `server_beta_*` since they are persisted DDL identifiers.
@@ -45,6 +45,14 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
         ON CONFLICT (version) DO NOTHING
       `,
       [SERVER_POSTGRES_SCHEMA_VERSION, 'phase 1 postgres observation storage foundation']
+    );
+    await client.query(
+      `
+        INSERT INTO server_beta_schema_migrations (version, description)
+        VALUES ($1, $2)
+        ON CONFLICT (version) DO NOTHING
+      `,
+      [2, 'phase 1 author seam: actor_id + api_key_id on observations/agent_events']
     );
     await client.query('COMMIT');
   } catch (error) {
@@ -329,4 +337,19 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
   PRIMARY KEY (subject_id, window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window ON rate_limit_counters(window_start);
+
+-- Phase 1 (WS2 author seam, ADR 0001 §6) — denormalize author identity onto
+-- the memory rows so team memory is attributable/filterable/scopable by
+-- teammate without a five-hop audit join. Additive, nullable, backfillable.
+-- Local worker mode never runs this schema (Postgres-only). Idempotent so an
+-- existing server DB upgrades in place.
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS actor_id TEXT;
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS api_key_id TEXT
+  REFERENCES api_keys(id) ON DELETE SET NULL;
+ALTER TABLE agent_events ADD COLUMN IF NOT EXISTS actor_id TEXT;
+ALTER TABLE agent_events ADD COLUMN IF NOT EXISTS api_key_id TEXT
+  REFERENCES api_keys(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_observations_actor
+  ON observations(team_id, project_id, actor_id)
+  WHERE actor_id IS NOT NULL;
 `;
