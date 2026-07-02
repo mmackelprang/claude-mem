@@ -339,7 +339,7 @@ function checkPackageCompleteness(failures) {
 // PART 3 — plugin relative-require closure (the #3091/#3092/#3107 guard)
 // ---------------------------------------------------------------------------
 // The worker reaches SessionStore via a lazy
-// createRequire('../sqlite/SessionStore.js') that fires only on the first
+// createRequire('../sqlite/SessionStore.cjs') that fires only on the first
 // observation/backfill — never during the `--version` boots PART 1/2 do, so
 // those parts cannot catch a missing sibling. Statically assert every relative
 // require target inside the PACKED plugin/scripts/*.cjs resolves inside the

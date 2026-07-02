@@ -34,7 +34,7 @@ let _sessionStoreCtor: SessionStoreCtor | undefined;
 function loadSessionStoreCtor(): SessionStoreCtor {
   if (!_sessionStoreCtor) {
     const req = lazyCreateRequire();
-    const m = req('../sqlite/SessionStore.js') as { SessionStore: SessionStoreCtor };
+    const m = req('../sqlite/SessionStore.cjs') as { SessionStore: SessionStoreCtor };
     _sessionStoreCtor = m.SessionStore;
   }
   return _sessionStoreCtor;
