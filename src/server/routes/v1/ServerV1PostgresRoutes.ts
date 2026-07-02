@@ -121,6 +121,13 @@ async function waitForTerminalJob(
 export class ServerV1PostgresRoutes implements RouteHandler {
   private readonly ingestEvents: IngestEventsService;
   private readonly endSession: EndSessionService;
+  // Request-scoped memo for resolveActorId(): a single write request now stamps
+  // the memory/agent_event row AND writes an audit_log row, both of which resolve
+  // actor_id from the same api_keys id. Cache per-request so we do one SELECT, and
+  // so the row and its audit entry can never disagree on author. WeakMap ⇒ the
+  // entry is GC'd with the request. Transient failures are intentionally NOT cached
+  // (see resolveActorId) so a later call in the same request can still retry.
+  private readonly actorIdByRequest = new WeakMap<Request, string | null>();
 
   constructor(private readonly options: ServerV1PostgresRoutesOptions) {
     const ingestOpts: ConstructorParameters<typeof IngestEventsService>[0] = {
@@ -1171,19 +1178,28 @@ export class ServerV1PostgresRoutes implements RouteHandler {
   // is purely a denormalization for audit trails. If the lookup fails for
   // any reason we return null and let the audit row carry a missing actor.
   private async resolveActorId(req: Request): Promise<string | null> {
+    // WeakMap.get returns undefined only when absent; a cached null is a real hit.
+    const cached = this.actorIdByRequest.get(req);
+    if (cached !== undefined) return cached;
     const apiKeyId = req.authContext?.apiKeyId ?? null;
-    if (!apiKeyId) return null;
+    if (!apiKeyId) {
+      this.actorIdByRequest.set(req, null);
+      return null;
+    }
     try {
       const result = await this.options.pool.query<{ actor_id: string | null }>(
         'SELECT actor_id FROM api_keys WHERE id = $1',
         [apiKeyId],
       );
-      return result.rows[0]?.actor_id ?? null;
+      const actorId = result.rows[0]?.actor_id ?? null;
+      this.actorIdByRequest.set(req, actorId);
+      return actorId;
     } catch (error) {
       logger.warn('SYSTEM', 'failed to resolve actor_id for audit', {
         apiKeyId,
         error: error instanceof Error ? error.message : String(error),
       });
+      // Do NOT cache a transient failure — let a later call in this request retry.
       return null;
     }
   }
