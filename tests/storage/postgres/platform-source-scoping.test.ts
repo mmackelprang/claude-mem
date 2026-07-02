@@ -213,12 +213,15 @@ describe('server-beta Postgres platform source scoping', () => {
     expect(client.calls[0].text).toContain('observations.server_session_id IS NULL');
     expect(client.calls[0].text).toContain('INNER JOIN agent_events');
     expect(client.calls[0].text).toContain('agent_events.platform_source = $5');
+    // WS2 Phase 1 — optional author filter is a 6th param, null when omitted.
+    expect(client.calls[0].text).toContain('observations.actor_id = $6');
     expect(client.calls[0].values).toEqual([
       'project-1',
       'team-1',
       'auth bug',
       7,
       'cursor',
+      null,
     ]);
   });
 });
