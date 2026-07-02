@@ -1,5 +1,7 @@
 # claude-mem Architecture Overview
 
+> Architecture decision records live in [`docs/architecture/decisions/`](./architecture/decisions/README.md). For the multi-user / cross-team direction (extend the Hosted Server beta runtime), see [ADR 0001](./architecture/decisions/2026-07-02-multi-user-cross-team-memory.md).
+
 ## System Layers
 
 ```text
