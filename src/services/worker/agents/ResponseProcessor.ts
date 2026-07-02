@@ -325,7 +325,7 @@ async function syncAndBroadcastObservations(
         obsId,
         type: obs.type,
         title: obs.title || '(untitled)'
-      }, error);
+      }, error instanceof Error ? error : new Error(String(error)));
     });
 
     broadcastObservation(worker, {
@@ -410,7 +410,7 @@ async function syncAndBroadcastSummary(
     logger.error('CHROMA', `${agentName} chroma sync failed, continuing without vector search`, {
       summaryId: result.summaryId,
       request: summaryForStore.request || '(no request)'
-    }, error);
+    }, error instanceof Error ? error : new Error(String(error)));
   });
 
   broadcastSummary(worker, {

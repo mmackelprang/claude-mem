@@ -594,7 +594,7 @@ export class WorkerService implements WorkerRef {
       // try/caught), so this .catch is an unhandled-rejection backstop that
       // keeps the worker alive if that contract ever regresses.
       runHistoricalBackfill(this.dbManager.getConnection()).catch(error => {
-        logger.error('SYSTEM', 'Telemetry historical backfill failed (non-blocking)', {}, error as Error);
+        logger.error('SYSTEM', 'Telemetry historical backfill failed (non-blocking)', {}, error instanceof Error ? error : new Error(String(error)));
       });
 
       await this.startTranscriptWatcher(settings);
@@ -603,7 +603,7 @@ export class WorkerService implements WorkerRef {
         ChromaSync.backfillAllProjects(this.dbManager.getSessionStore()).then(() => {
           logger.info('CHROMA_SYNC', 'Backfill check complete for all projects');
         }).catch(error => {
-          logger.error('CHROMA_SYNC', 'Backfill failed (non-blocking)', {}, error as Error);
+          logger.error('CHROMA_SYNC', 'Backfill failed (non-blocking)', {}, error instanceof Error ? error : new Error(String(error)));
         });
       }
 
