@@ -673,6 +673,11 @@ async function indexObservationsToChroma(
       kind: observation.kind,
       observationId: observation.id,
       observationType: observation.kind,
+      // WS2 Phase 1 — author dimension for Chroma `where` filtering (Phase 4
+      // wires the /v1 read surfaces to this path). Empty string collapses to
+      // metadata-absent via ChromaSync's clean step, so a null/local author
+      // indexes as author-absent rather than a meaningless empty value.
+      actorId: observation.actorId ?? '',
       // ChromaSync's clean step filters out empty strings (ChromaSync.ts:291-295),
       // so passing '' for missing server_session_id collapses cleanly to
       // metadata-absent rather than indexing a meaningless empty value.

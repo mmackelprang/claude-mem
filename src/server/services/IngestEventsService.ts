@@ -101,7 +101,11 @@ export class IngestEventsService {
 
     const txResult = await withPostgresTransaction(this.options.pool, async (client) => {
       const eventsRepo = new PostgresAgentEventsRepository(client);
-      const inserted = await eventsRepo.create(input);
+      const inserted = await eventsRepo.create({
+        ...input,
+        actorId: opts.actorId ?? null,
+        apiKeyId: opts.apiKeyId ?? null,
+      });
 
       if (!generate) {
         return { event: inserted, outbox: null as PostgresObservationGenerationJob | null };
@@ -172,7 +176,11 @@ export class IngestEventsService {
       const eventsLogRepo = new PostgresObservationGenerationJobEventsRepository(client);
       const acc: { event: PostgresAgentEvent; outbox: PostgresObservationGenerationJob | null }[] = [];
       for (const input of inputs) {
-        const event = await eventsRepo.create(input);
+        const event = await eventsRepo.create({
+          ...input,
+          actorId: opts.actorId ?? null,
+          apiKeyId: opts.apiKeyId ?? null,
+        });
         if (!generate) {
           acc.push({ event, outbox: null });
           continue;

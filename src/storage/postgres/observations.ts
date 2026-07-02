@@ -26,6 +26,8 @@ export interface PostgresObservation {
   metadata: JsonObject;
   embedding: JsonValue | null;
   createdByJobId: string | null;
+  actorId: string | null;
+  apiKeyId: string | null;
   createdAtEpoch: number;
   updatedAtEpoch: number;
 }
@@ -52,6 +54,8 @@ interface ObservationRow {
   metadata: unknown;
   embedding: unknown | null;
   created_by_job_id: string | null;
+  actor_id: string | null;
+  api_key_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -81,6 +85,8 @@ export class PostgresObservationRepository {
     metadata?: JsonObject;
     embedding?: JsonValue | null;
     createdByJobId?: string | null;
+    actorId?: string | null;
+    apiKeyId?: string | null;
   }): Promise<PostgresObservation> {
     await assertProjectOwnership(this.client, input.projectId, input.teamId);
     if (input.serverSessionId) {
@@ -95,9 +101,9 @@ export class PostgresObservationRepository {
       `
         INSERT INTO observations (
           id, project_id, team_id, server_session_id, kind, content,
-          generation_key, metadata, embedding, created_by_job_id
+          generation_key, metadata, embedding, created_by_job_id, actor_id, api_key_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
         ON CONFLICT (team_id, project_id, generation_key) WHERE generation_key IS NOT NULL DO UPDATE SET
           updated_at = observations.updated_at
         RETURNING *
@@ -112,7 +118,9 @@ export class PostgresObservationRepository {
         input.generationKey ?? null,
         JSON.stringify(input.metadata ?? {}),
         input.embedding == null ? null : JSON.stringify(input.embedding),
-        input.createdByJobId ?? null
+        input.createdByJobId ?? null,
+        input.actorId ?? null,
+        input.apiKeyId ?? null
       ]
     );
     return mapObservationRow(row!);
@@ -157,6 +165,7 @@ export class PostgresObservationRepository {
     query: string;
     limit?: number;
     platformSource?: string | null;
+    actorId?: string | null;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
     const result = await this.client.query<ObservationRow>(
@@ -169,6 +178,7 @@ export class PostgresObservationRepository {
         WHERE observations.project_id = $1
           AND observations.team_id = $2
           AND observations.content_search @@ websearch_to_tsquery('english', $3)
+          AND ($6::text IS NULL OR observations.actor_id = $6)
           AND (
             $5::text IS NULL
             OR server_sessions.platform_source = $5
@@ -190,7 +200,7 @@ export class PostgresObservationRepository {
         ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC, observations.updated_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource]
+      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource, input.actorId ?? null]
     );
     return result.rows.map(mapObservationRow);
   }
@@ -401,6 +411,8 @@ function mapObservationRow(row: ObservationRow): PostgresObservation {
     metadata: toJsonObject(row.metadata),
     embedding: row.embedding,
     createdByJobId: row.created_by_job_id,
+    actorId: row.actor_id,
+    apiKeyId: row.api_key_id,
     createdAtEpoch: toEpoch(row.created_at),
     updatedAtEpoch: toEpoch(row.updated_at)
   };

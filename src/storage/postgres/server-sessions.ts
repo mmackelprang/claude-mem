@@ -321,6 +321,8 @@ interface UnprocessedEventRow {
   platform_source: string | null;
   payload: unknown;
   metadata: unknown;
+  actor_id: string | null;
+  api_key_id: string | null;
   occurred_at: Date;
   received_at: Date;
   created_at: Date;
@@ -339,6 +341,8 @@ function mapUnprocessedEventRow(row: UnprocessedEventRow): PostgresAgentEvent {
     platformSource: row.platform_source,
     payload: toJsonObject(row.payload),
     metadata: toJsonObject(row.metadata),
+    actorId: row.actor_id,
+    apiKeyId: row.api_key_id,
     occurredAtEpoch: row.occurred_at.getTime(),
     receivedAtEpoch: row.received_at.getTime(),
     createdAtEpoch: row.created_at.getTime()

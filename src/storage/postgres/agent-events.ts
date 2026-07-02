@@ -25,6 +25,8 @@ export interface PostgresAgentEvent {
   platformSource: string | null;
   payload: JsonValue;
   metadata: JsonObject;
+  actorId: string | null;
+  apiKeyId: string | null;
   occurredAtEpoch: number;
   receivedAtEpoch: number;
   createdAtEpoch: number;
@@ -44,6 +46,8 @@ export interface CreatePostgresAgentEventInput {
   platformSource?: string | null;
   payload?: JsonValue;
   metadata?: JsonObject;
+  actorId?: string | null;
+  apiKeyId?: string | null;
   occurredAt: Date | string | number;
 }
 
@@ -59,6 +63,8 @@ interface AgentEventRow {
   platform_source: string | null;
   payload: unknown;
   metadata: unknown;
+  actor_id: string | null;
+  api_key_id: string | null;
   occurred_at: Date;
   received_at: Date;
   created_at: Date;
@@ -79,12 +85,15 @@ export class PostgresAgentEventsRepository {
       `
         INSERT INTO agent_events (
           id, project_id, team_id, server_session_id, source_adapter,
-          source_event_id, idempotency_key, event_type, platform_source, payload, metadata, occurred_at
+          source_event_id, idempotency_key, event_type, platform_source, payload, metadata,
+          actor_id, api_key_id, occurred_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14)
         ON CONFLICT (idempotency_key) DO UPDATE SET
           metadata = agent_events.metadata || excluded.metadata,
-          platform_source = COALESCE(excluded.platform_source, agent_events.platform_source)
+          platform_source = COALESCE(excluded.platform_source, agent_events.platform_source),
+          actor_id = COALESCE(agent_events.actor_id, excluded.actor_id),
+          api_key_id = COALESCE(agent_events.api_key_id, excluded.api_key_id)
         RETURNING *
       `,
       [
@@ -99,6 +108,8 @@ export class PostgresAgentEventsRepository {
         platformSource,
         JSON.stringify(input.payload ?? {}),
         JSON.stringify(input.metadata ?? {}),
+        input.actorId ?? null,
+        input.apiKeyId ?? null,
         new Date(input.occurredAt)
       ]
     );
@@ -193,6 +204,8 @@ function mapAgentEventRow(row: AgentEventRow): PostgresAgentEvent {
     platformSource: row.platform_source,
     payload: row.payload,
     metadata: toJsonObject(row.metadata),
+    actorId: row.actor_id,
+    apiKeyId: row.api_key_id,
     occurredAtEpoch: toEpoch(row.occurred_at),
     receivedAtEpoch: toEpoch(row.received_at),
     createdAtEpoch: toEpoch(row.created_at)

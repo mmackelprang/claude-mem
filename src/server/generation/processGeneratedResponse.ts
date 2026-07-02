@@ -149,6 +149,8 @@ export async function processGeneratedResponse(
           model: input.modelId ?? null,
         },
         createdByJobId: fresh.id,
+        actorId: input.actorId ?? null,
+        apiKeyId: input.apiKeyId ?? null,
       });
       persisted.push(observation);
 
@@ -441,6 +443,8 @@ export async function processSessionSummaryResponse(
             model: input.modelId ?? null,
           },
           createdByJobId: fresh.id,
+          actorId: input.actorId ?? null,
+          apiKeyId: input.apiKeyId ?? null,
         });
         persisted.push(observation);
 
