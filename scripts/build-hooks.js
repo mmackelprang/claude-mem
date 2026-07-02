@@ -414,15 +414,6 @@ async function buildHooks() {
     const sessionStoreStats = fs.statSync(sessionStoreOut);
     console.log(`✓ sqlite/SessionStore.js built (${(sessionStoreStats.size / 1024).toFixed(2)} KB)`);
 
-    // Fast, local half of the packaging guard: assert every relative require
-    // target inside the just-built plugin/scripts/*.cjs resolves to an emitted
-    // sibling. smoke:clean-room PART 3 re-checks the same invariant against the
-    // packed tarball (what actually ships). Together they make the
-    // #3091/#3092/#3107 class of bug — a lazy createRequire('../…') whose target
-    // the build never emits — impossible to ship. See scripts/check-sdk-bundle.cjs
-    // for the sibling string-scan pattern.
-    assertPluginRelativeRequiresResolve(hooksDir);
-
     console.log(`\n🔧 Building server beta service...`);
     await build({
       entryPoints: [SERVER_SERVICE.source],
@@ -588,6 +579,18 @@ async function buildHooks() {
         `⚠️  transcript-watcher.cjs is ${(transcriptWatcherStats.size / 1024).toFixed(2)} KB (advisory budget ${(TRANSCRIPT_WATCHER_MAX_BYTES / 1024).toFixed(0)} KB). If this jumped unexpectedly, check src/services/transcripts/processor.ts and watcher.ts for heavy imports.`
       );
     }
+
+    // Fast, local half of the packaging guard: assert every relative require
+    // target inside the just-built plugin/scripts/*.cjs resolves to an emitted
+    // sibling. Runs AFTER all five plugin/scripts bundles (worker-service,
+    // server-service, mcp-server, context-generator, transcript-watcher) are
+    // (re)built this run, so it scans the fresh output for every target — not a
+    // stale mix. smoke:clean-room PART 3 re-checks the same invariant against the
+    // packed tarball (what actually ships). Together they make the
+    // #3091/#3092/#3107 class of bug — a lazy createRequire('../…') whose target
+    // the build never emits — impossible to ship. See scripts/check-sdk-bundle.cjs
+    // for the sibling string-scan pattern.
+    assertPluginRelativeRequiresResolve(hooksDir);
 
     console.log(`\n🔧 Building NPX CLI...`);
     const npxCliOutDir = 'dist/npx-cli';
