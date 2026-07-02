@@ -44,7 +44,7 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
         VALUES ($1, $2)
         ON CONFLICT (version) DO NOTHING
       `,
-      [SERVER_POSTGRES_SCHEMA_VERSION, 'phase 1 postgres observation storage foundation']
+      [1, 'phase 1 postgres observation storage foundation']
     );
     await client.query(
       `
