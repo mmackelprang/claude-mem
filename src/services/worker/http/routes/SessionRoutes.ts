@@ -620,7 +620,7 @@ export class SessionRoutes extends BaseRouteHandler {
           logger.error('CHROMA', 'User prompt sync failed, continuing without vector search', {
             promptId: latestPrompt.id,
             prompt: promptText.length > 60 ? promptText.substring(0, 60) + '...' : promptText
-          }, error);
+          }, error instanceof Error ? error : new Error(String(error)));
         });
       }
 

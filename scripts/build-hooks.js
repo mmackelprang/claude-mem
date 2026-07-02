@@ -55,6 +55,45 @@ function stripHardcodedDirname(filePath) {
 }
 
 /**
+ * Assert that every relative module specifier (`"../x.js"` / `"./x.js"`)
+ * appearing as a string literal inside plugin/scripts/*.cjs resolves to a file
+ * on disk, relative to that .cjs. The worker reaches SessionStore via a lazy
+ * createRequire('../sqlite/SessionStore.cjs') that esbuild leaves as a bare
+ * string literal in the bundle (not a static import it can follow) — so a
+ * missing emit is invisible to esbuild and only explodes at runtime on the
+ * first observation/backfill. This static scan catches it at build time.
+ * Model: scripts/check-sdk-bundle.cjs (string match against emitted JS).
+ */
+function assertPluginRelativeRequiresResolve(scriptsDir) {
+  const RELATIVE_SPECIFIER = /["'](\.\.?\/[A-Za-z0-9_./-]+\.(?:c?js))["']/g;
+  const failures = [];
+  for (const entry of fs.readdirSync(scriptsDir)) {
+    if (!entry.endsWith('.cjs')) continue;
+    const filePath = path.join(scriptsDir, entry);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const seen = new Set();
+    let m;
+    while ((m = RELATIVE_SPECIFIER.exec(content)) !== null) {
+      const spec = m[1];
+      if (seen.has(spec)) continue;
+      seen.add(spec);
+      const resolved = path.resolve(path.dirname(filePath), spec);
+      if (!fs.existsSync(resolved)) {
+        failures.push(`${entry} requires "${spec}" but ${path.relative(scriptsDir, resolved)} was not emitted`);
+      }
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      'Plugin relative-require guard FAILED — a bundled script references a ' +
+      'sibling module the build did not emit (this is the #3091/#3092/#3107 ' +
+      'class of bug):\n  - ' + failures.join('\n  - ')
+    );
+  }
+  console.log('✓ Plugin relative-require guard: all ../ and ./ require targets in plugin/scripts/*.cjs resolve');
+}
+
+/**
  * Rule A canonical-template manifest: maps each host-managed config file's
  * command string to the buildShellCommand() options that generate it. The
  * build asserts the hand-maintained files still match the generator output so
@@ -349,6 +388,35 @@ async function buildHooks() {
       );
     }
 
+    // worker-service reaches SessionStore through a runtime
+    // createRequire(import.meta.url)('../sqlite/SessionStore.cjs') call (see
+    // ChromaSync.ts loadSessionStoreCtor), not a static import: SessionStore
+    // pulls in `bun:sqlite`, so a static import would drag it into the cmem-sdk
+    // (tsup) bundle and fail scripts/check-sdk-bundle.cjs. esbuild's worker
+    // bundle does not follow that indirection either, so SessionStore.cjs must be
+    // emitted as a loose sibling of the bundle for the runtime require to
+    // resolve (#3091/#3092/#3107). We emit it with a .cjs extension (not .js) so
+    // Node consumers can require() it despite plugin/package.json's
+    // "type":"module" — Bun ignores the field, but Node otherwise refuses to
+    // require a .js file under an ESM package. observations/files.js is intentionally NOT
+    // emitted — parseFileList is a static import inlined into the worker bundle
+    // (no bun:sqlite in its chain), the more robust fix for the hot path.
+    console.log(`\n🔧 Building lazy-loaded SessionStore module for worker-service...`);
+    const sessionStoreOut = `${hooksDir}/../sqlite/SessionStore.cjs`;
+    await build({
+      entryPoints: ['src/services/sqlite/SessionStore.ts'],
+      bundle: true,
+      platform: 'node',
+      target: 'node18',
+      format: 'cjs',
+      outfile: sessionStoreOut,
+      minify: true,
+      logLevel: 'error',
+      external: ['bun:sqlite'],
+    });
+    const sessionStoreStats = fs.statSync(sessionStoreOut);
+    console.log(`✓ sqlite/SessionStore.cjs built (${(sessionStoreStats.size / 1024).toFixed(2)} KB)`);
+
     console.log(`\n🔧 Building server beta service...`);
     await build({
       entryPoints: [SERVER_SERVICE.source],
@@ -514,6 +582,18 @@ async function buildHooks() {
         `⚠️  transcript-watcher.cjs is ${(transcriptWatcherStats.size / 1024).toFixed(2)} KB (advisory budget ${(TRANSCRIPT_WATCHER_MAX_BYTES / 1024).toFixed(0)} KB). If this jumped unexpectedly, check src/services/transcripts/processor.ts and watcher.ts for heavy imports.`
       );
     }
+
+    // Fast, local half of the packaging guard: assert every relative require
+    // target inside the just-built plugin/scripts/*.cjs resolves to an emitted
+    // sibling. Runs AFTER all five plugin/scripts bundles (worker-service,
+    // server-service, mcp-server, context-generator, transcript-watcher) are
+    // (re)built this run, so it scans the fresh output for every target — not a
+    // stale mix. smoke:clean-room PART 3 re-checks the same invariant against the
+    // packed tarball (what actually ships). Together they make the
+    // #3091/#3092/#3107 class of bug — a lazy createRequire('../…') whose target
+    // the build never emits — impossible to ship. See scripts/check-sdk-bundle.cjs
+    // for the sibling string-scan pattern.
+    assertPluginRelativeRequiresResolve(hooksDir);
 
     console.log(`\n🔧 Building NPX CLI...`);
     const npxCliOutDir = 'dist/npx-cli';

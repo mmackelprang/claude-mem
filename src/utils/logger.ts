@@ -70,6 +70,23 @@ interface LogContext {
 export type ErrorSink = (err: unknown, ctx?: Record<string, unknown>) => void;
 let errorSink: ErrorSink | null = null;
 
+/**
+ * Bun throws `ResolveMessage` / `BuildMessage` for a failed require()/import.
+ * These are NOT `instanceof Error`, and their `.message`/`.stack` are
+ * non-enumerable, so `Object.keys()`/JSON serialization renders them as `{}` —
+ * exactly why the #3091/#3092 MODULE_NOT_FOUND presented as an empty `{}` and
+ * went undiagnosed. Treat any object exposing a string `message` (or `stack`)
+ * as error-like so it serializes usefully.
+ */
+function isErrorLike(value: unknown): value is { message: string; stack?: string } {
+  return (
+    value instanceof Error ||
+    (typeof value === 'object' &&
+      value !== null &&
+      typeof (value as { message?: unknown }).message === 'string')
+  );
+}
+
 
 class Logger {
   private level: LogLevel | null = null;
@@ -128,9 +145,10 @@ class Logger {
     if (typeof data === 'boolean') return data.toString();
 
     if (typeof data === 'object') {
-      if (data instanceof Error) {
-        return this.getLevel() === LogLevel.DEBUG
-          ? `${data.message}\n${data.stack}`
+      if (isErrorLike(data)) {
+        const stack = data.stack;
+        return this.getLevel() === LogLevel.DEBUG && stack
+          ? `${data.message}\n${stack}`
           : data.message;
       }
 
@@ -244,9 +262,10 @@ class Logger {
 
     let dataStr = '';
     if (data !== undefined && data !== null) {
-      if (data instanceof Error) {
-        dataStr = this.getLevel() === LogLevel.DEBUG
-          ? `\n${data.message}\n${data.stack}`
+      if (isErrorLike(data)) {
+        const stack = data.stack;
+        dataStr = this.getLevel() === LogLevel.DEBUG && stack
+          ? `\n${data.message}\n${stack}`
           : ` ${data.message}`;
       } else if (this.getLevel() === LogLevel.DEBUG && typeof data === 'object') {
         try {
@@ -321,13 +340,13 @@ class Logger {
    */
   private routeErrorToSink(message: string, context?: LogContext, data?: any): void {
     try {
-      if (!errorSink || !(data instanceof Error)) return;
+      if (!errorSink || !isErrorLike(data)) return;
       // Pass the message as context so the sink can fingerprint on it too; the
       // sink (captureException) scrubs everything through error-scrub /
       // scrubProperties, so an unsafe message here cannot leak — but `message`
       // is not whitelisted, so it is dropped by scrubProperties anyway. We pass
       // only the Error itself; context is intentionally minimal.
-      errorSink(data);
+      errorSink(data instanceof Error ? data : new Error(data.message));
     } catch {
       // Telemetry/error-sink must never break logging.
     }
