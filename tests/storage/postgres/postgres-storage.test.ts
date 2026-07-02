@@ -81,6 +81,32 @@ describe('server beta postgres schema bootstrap', () => {
     expect(schemaSql).toContain('DROP INDEX IF EXISTS idx_server_sessions_content_session');
     expect(schemaSql).toContain('idx_server_sessions_content_session_platform');
   });
+
+  it('bootstraps the Phase 1 author-seam columns and index (additive, nullable)', async () => {
+    const queries: string[] = [];
+    const client = {
+      async query(text: string) {
+        queries.push(text);
+        return { rows: [], rowCount: 0 };
+      }
+    } as unknown as PostgresPoolClient;
+
+    await bootstrapServerPostgresSchema(client);
+    const sql = queries.join('\n');
+
+    expect(sql).toContain('ALTER TABLE observations ADD COLUMN IF NOT EXISTS actor_id TEXT');
+    expect(sql).toContain('ALTER TABLE observations ADD COLUMN IF NOT EXISTS api_key_id TEXT');
+    expect(sql).toContain('ALTER TABLE agent_events ADD COLUMN IF NOT EXISTS actor_id TEXT');
+    expect(sql).toContain('ALTER TABLE agent_events ADD COLUMN IF NOT EXISTS api_key_id TEXT');
+    expect(sql).toContain('idx_observations_actor');
+    // additive-only: no DROP COLUMN, no NOT NULL on the new columns. Scope the
+    // NOT-NULL guard to the ADD COLUMN statement so it does not collide with the
+    // pre-existing (and legitimately NOT NULL) api_keys.actor_id column.
+    expect(sql).not.toContain('DROP COLUMN actor_id');
+    expect(sql).not.toContain('ADD COLUMN IF NOT EXISTS actor_id TEXT NOT NULL');
+    // version-2 migration recorded
+    expect(queries.some(q => q.includes('server_beta_schema_migrations'))).toBe(true);
+  });
 });
 
 describe('server beta postgres observation storage', () => {

@@ -312,4 +312,37 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     const reloaded = await reloadJob();
     expect(reloaded?.status).toBe('queued');
   });
+
+  it('stamps actor_id + api_key_id on the generated observation row', async () => {
+    // Inline valid-observation XML, matching this file's existing per-test
+    // pattern (e.g. :193, :208) — the file does not export a shared fixture.
+    const xml = `<observation><type>discovery</type><title>Alice deployed cache</title><facts><fact>alice deployed the cache layer</fact></facts></observation>`;
+    await storage.observationGenerationJobs.transitionStatus({
+      id: jobId,
+      projectId,
+      teamId,
+      status: 'processing',
+    });
+    const fresh = (await reloadJob())!;
+    const outcome = await processGeneratedResponse({
+      pool: pool as unknown as Parameters<typeof processGeneratedResponse>[0]['pool'],
+      job: fresh,
+      rawText: xml,
+      providerLabel: 'test',
+      actorId: 'human:alice@org',
+      apiKeyId: null, // no FK row minted in this harness; null exercises the nullable path
+    });
+    expect(outcome.kind).toBe('completed');
+    if (outcome.kind !== 'completed') return;
+
+    const obs = outcome.observations[0]!;
+    const row = await client.query(
+      'SELECT actor_id, api_key_id FROM observations WHERE id = $1',
+      [obs.id],
+    );
+    expect(row.rows[0]?.actor_id).toBe('human:alice@org');
+    expect(row.rows[0]?.api_key_id).toBeNull();
+    // and the repo mapping surfaces it
+    expect(obs.actorId).toBe('human:alice@org');
+  });
 });
