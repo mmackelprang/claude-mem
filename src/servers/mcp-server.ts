@@ -39,6 +39,7 @@ import {
   type ServerRuntimeContext,
 } from '../services/hooks/runtime-selector.js';
 import { normalizePlatformSource } from '../shared/platform-source.js';
+import { decideSearchRoute } from './mcp-search-routing.js';
 
 let mcpServerDirResolutionFailed = false;
 const mcpServerDir = (() => {
@@ -285,6 +286,22 @@ function formatJsonResult(payload: unknown): { content: Array<{ type: 'text'; te
       type: 'text' as const,
       text: JSON.stringify(payload, null, 2),
     }],
+  };
+}
+
+function serverRuntimeUnsupportedTool(
+  toolName: string,
+  alternative: string,
+): { content: Array<{ type: 'text'; text: string }>; isError: true } {
+  return {
+    content: [{
+      type: 'text' as const,
+      text: `${toolName} is a worker-runtime tool and is not available under CLAUDE_MEM_RUNTIME=server. `
+        + `It reads the local SQLite numeric-id store, which server mode does not use `
+        + `(server observations are UUID-keyed in Postgres). Use ${alternative}, or set `
+        + `CLAUDE_MEM_RUNTIME=worker.`,
+    }],
+    isError: true as const,
   };
 }
 
@@ -590,6 +607,25 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       additionalProperties: true
     },
     handler: async (args: any) => {
+      // #3082 — `search` is runtime-aware. Under RUNTIME=server the local
+      // worker SQLite is frozen (generated observations live in Postgres) and
+      // MCP does not auto-start the worker, so the legacy /api/search path
+      // returns 0 observations (or a worker transport error). Route
+      // faithfully-serviceable queries to the PG-backed /v1/search (the same
+      // path observation_search uses); everything else keeps the worker path,
+      // which still owns prompts, cross-project name filters, date/offset/
+      // orderBy, and worker-mode installs.
+      try {
+        const resolution = resolveServerToolContext();
+        if (resolution && resolution.available) {
+          const route = decideSearchRoute(args ?? {}, true, resolution.projectId);
+          if (route.target === 'server') {
+            return formatJsonResult(await resolution.client.searchObservations(route.request));
+          }
+        }
+      } catch (error) {
+        return formatToolError(error);
+      }
       const endpoint = TOOL_ENDPOINT_MAP['search'];
       return await callWorkerAPI(endpoint, args);
     }
@@ -609,6 +645,9 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       additionalProperties: true
     },
     handler: async (args: any) => {
+      if (selectRuntime() === 'server') {
+        return serverRuntimeUnsupportedTool('timeline', 'observation_search / observation_context');
+      }
       const endpoint = TOOL_ENDPOINT_MAP['timeline'];
       return await callWorkerAPI(endpoint, args);
     }
@@ -629,6 +668,12 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       additionalProperties: true
     },
     handler: async (args: any) => {
+      if (selectRuntime() === 'server') {
+        return serverRuntimeUnsupportedTool(
+          'get_observations',
+          'observation_search (its results already carry full content)',
+        );
+      }
       return await callWorkerAPIPost('/api/observations/batch', args);
     }
   },

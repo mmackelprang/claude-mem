@@ -161,7 +161,7 @@ function normalizeScopes(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string');
 }
 
-function hasRequiredScopes(grantedScopes: string[], requiredScopes: string[]): boolean {
+export function hasRequiredScopes(grantedScopes: string[], requiredScopes: string[]): boolean {
   if (requiredScopes.length === 0 || grantedScopes.includes('*')) {
     return true;
   }

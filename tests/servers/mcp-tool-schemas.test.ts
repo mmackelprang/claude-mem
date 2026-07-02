@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'bun:test';
+import { fileURLToPath } from 'node:url';
 
-const mcpServerPath = new URL('../../src/servers/mcp-server.ts', import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so this resolves correctly on Windows too —
+// URL.pathname yields an OS-invalid "/D:/..." on win32.
+const mcpServerPath = fileURLToPath(new URL('../../src/servers/mcp-server.ts', import.meta.url));
 
 describe('MCP tool inputSchema declarations', () => {
   let tools: any[];
@@ -146,5 +149,22 @@ describe('MCP tool inputSchema declarations', () => {
     const src = await Bun.file(mcpServerPath).text();
     expect(src).not.toMatch(/from\s+['"][^'"]*WorkerService[^'"]*['"]/);
     expect(src).not.toMatch(/import\s+\{[^}]*WorkerService[^}]*\}/);
+  });
+
+  it('search handler is runtime-aware (routes to /v1 via decideSearchRoute) — #3082', async () => {
+    const src = await Bun.file(mcpServerPath).text();
+    const searchSection = src.slice(src.indexOf("name: 'search'"), src.indexOf("name: 'timeline'"));
+    expect(searchSection).toContain('decideSearchRoute');
+    expect(searchSection).toContain('resolveServerToolContext');
+    expect(searchSection).toContain('searchObservations');
+    expect(src).toContain("import { decideSearchRoute } from './mcp-search-routing.js'");
+  });
+
+  it('timeline and get_observations guard against server runtime — #3082', async () => {
+    const src = await Bun.file(mcpServerPath).text();
+    const timelineSection = src.slice(src.indexOf("name: 'timeline'"), src.indexOf("name: 'get_observations'"));
+    const getObsSection = src.slice(src.indexOf("name: 'get_observations'"), src.indexOf("name: 'session_start_context'"));
+    expect(timelineSection).toContain("selectRuntime() === 'server'");
+    expect(getObsSection).toContain("selectRuntime() === 'server'");
   });
 });

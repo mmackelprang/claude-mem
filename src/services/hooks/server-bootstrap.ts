@@ -11,8 +11,12 @@
 //   2. Find or create a "local-hook" team and project so the api_key has
 //      proper tenant scope.
 //   3. Generate a `cmem_<random>` key, hash with SHA-256, insert into
-//      `api_keys` with the scopes hooks need: events:write, sessions:write,
-//      observations:read, jobs:read.
+//      `api_keys` with the scopes hooks need on the canonical /v1 surface:
+//      memories:read (search, context, job status) and memories:write
+//      (events, sessions). These are the SAME scopes every /v1 route gates on
+//      (ServerV1PostgresRoutes.ts / ServerV1Routes.ts); the legacy
+//      events:*/observations:*/jobs:* vocabulary authorized nothing and was
+//      removed. See docs/bug-fixes/serverbeta-scope-vocabulary-reconciliation.md.
 //   4. Persist the plaintext key to ~/.claude-mem/settings.json under
 //      `CLAUDE_MEM_SERVER_API_KEY` (the new canonical key after the
 //      server-beta → server rename). Reads in `runtime-selector.ts`
@@ -37,10 +41,8 @@ const LOCAL_HOOK_PROJECT_NAME = 'local-hook-project';
 const LOCAL_HOOK_ACTOR_ID = 'system:local-hook-bootstrap';
 
 export const HOOK_API_KEY_SCOPES: readonly string[] = Object.freeze([
-  'events:write',
-  'sessions:write',
-  'observations:read',
-  'jobs:read',
+  'memories:read',
+  'memories:write',
 ]);
 
 export interface BootstrapResult {
