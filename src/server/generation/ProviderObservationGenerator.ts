@@ -23,6 +23,8 @@ import {
 } from './processGeneratedResponse.js';
 import { PostgresServerSessionsRepository } from '../../storage/postgres/server-sessions.js';
 import { resolveDefaultVisibility } from '../../shared/visibility.js';
+import { ChromaSync } from '../../services/sync/ChromaSync.js';
+import { buildObservationChromaDocs } from '../../services/sync/observation-chroma-docs.js';
 
 // Phase 11 — sentinel exception class so the worker can distinguish
 // scope-violation/revoked-key failures from generic processor errors and
@@ -61,6 +63,43 @@ export interface ProviderObservationGeneratorOptions {
 
 export class ProviderObservationGenerator {
   constructor(private readonly options: ProviderObservationGeneratorOptions) {}
+
+  // Phase 4 — index server-beta generated observations to Chroma so the
+  // deployed team runtime actually has a vector index to recall against
+  // (§1.1: the BullMQ worker did NOT index to Chroma before this). Gated on the
+  // same strict env flag as the read path; default OFF so existing deploys and
+  // unit tests stay Postgres-only until an operator opts in.
+  private readonly chromaSyncByProject = new Map<string, ChromaSync>();
+  private readonly chromaEnabled = process.env.CLAUDE_MEM_CHROMA_ENABLED === 'true';
+
+  private getChromaSync(projectId: string): ChromaSync {
+    let sync = this.chromaSyncByProject.get(projectId);
+    if (!sync) { sync = new ChromaSync(projectId); this.chromaSyncByProject.set(projectId, sync); }
+    return sync;
+  }
+
+  private async indexToChroma(
+    projectId: string,
+    teamId: string,
+    // visibility included so the read-side `where` mirror (OVERRIDE-A) can
+    // enforce the same predicate; PostgresObservation always carries it.
+    observations: Array<{
+      id: string; content: string; kind: string;
+      actorId: string | null; serverSessionId: string | null; createdAtEpoch: number;
+      visibility?: string | null;
+    }>,
+  ): Promise<void> {
+    if (!this.chromaEnabled || observations.length === 0) return;
+    try {
+      const docs = buildObservationChromaDocs(observations, { projectId, teamId });
+      await this.getChromaSync(projectId).addDocuments(docs);
+    } catch (err) {
+      // Postgres is already canonical; a missed index is degraded, not fatal.
+      logger.error('CHROMA',
+        'server generation: Chroma indexing failed; observations persisted but not yet vector-searchable',
+        { projectId, teamId, observationCount: observations.length }, err as Error);
+    }
+  }
 
   /**
    * Worker entrypoint. Returns a small JSON summary on success so BullMQ's
@@ -244,6 +283,13 @@ export class ProviderObservationGenerator {
           ...(this.options.workerId !== undefined ? { workerId: this.options.workerId } : {}),
         });
         throw new Error(`generation parse error: ${outcome.reason}`);
+      }
+
+      // Phase 4 — index the freshly-persisted observations (and session
+      // summaries, which flow through the same outcome.observations) to Chroma.
+      // Gated + degrade-not-throw: a Chroma miss never fails a completed job.
+      if (outcome.observations.length > 0) {
+        await this.indexToChroma(fresh.projectId, fresh.teamId, outcome.observations);
       }
 
       logger.info('SYSTEM', 'generation completed', {
