@@ -1,6 +1,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { stripMemoryTagsFromPrompt, stripMemoryTagsFromJson, isInternalProtocolPayload } from '../../src/utils/tag-stripping.js';
+import { stripMemoryTagsFromPrompt, stripMemoryTagsFromJson, isInternalProtocolPayload, stripTags } from '../../src/utils/tag-stripping.js';
 import { logger } from '../../src/utils/logger.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
@@ -445,6 +445,35 @@ after`;
     it('returns false for two adjacent protocol blocks (deliberate: deny-list per single block, not concatenations)', () => {
       const text = '<task-notification>a</task-notification><task-notification>b</task-notification>';
       expect(isInternalProtocolPayload(text)).toBe(false);
+    });
+  });
+
+  describe('Phase 2 fail-safe: any WRAPPING private* tag redacts, self-closing switch survives', () => {
+    it('redacts any WRAPPING private* tag but leaves the self-closing switch', () => {
+      expect(stripTags('a<private>secret</private>b').stripped).toBe('ab');
+      expect(stripTags('a<private-session>secret</private-session>b').stripped).toBe('ab');
+      expect(stripTags('a<private-foo>secret</private-foo>b').stripped).toBe('ab');
+      // self-closing switch is NOT redaction — it survives stripping
+      expect(stripTags('keep <private-session /> this').stripped).toContain('<private-session />');
+    });
+
+    it('plain <private> still redacts exactly as before (non-regression)', () => {
+      expect(stripMemoryTagsFromPrompt('public <private>secret</private> more')).toBe('public  more');
+      expect(stripMemoryTagsFromPrompt('<private>entire prompt</private>')).toBe('');
+    });
+
+    it('counts wrapping private* tags under the stable "private" key', () => {
+      const result = stripTags('<private>a</private> mid <private-session>b</private-session>');
+      expect(result.counts.private).toBe(2);
+      expect(result.stripped).toBe('mid');
+    });
+
+    it('still strips the other fixed tag names alongside the private-prefix pass', () => {
+      const input = '<private>x</private> keep <system-reminder>y</system-reminder> end';
+      const result = stripTags(input);
+      expect(result.stripped).toBe('keep  end');
+      expect(result.counts.private).toBe(1);
+      expect(result.counts['system-reminder']).toBe(1);
     });
   });
 });
