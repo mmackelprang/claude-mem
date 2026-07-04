@@ -35,6 +35,11 @@ export interface ServerGenerationJob {
   // Phase 12 — request correlation id, optional but always serialized as a
   // nullable field so downstream consumers can rely on shape stability.
   request_id?: string | null;
+  // Phase 2 (WS2 visibility seam) — per-session/per-project visibility override
+  // stamped at ingest (e.g. <private-session /> flips this to 'private'). When
+  // absent the generator chokepoint resolves the config-driven default. Optional
+  // so older/other-kind payloads omit it; the worker reads the parsed value.
+  visibility?: import('../../shared/visibility.js').VisibilityLevel | null;
 }
 
 export interface GenerateObservationsForEventJob extends ServerGenerationJob {
@@ -99,6 +104,10 @@ const baseFieldsSchema = z.object({
   // this phase have nullable/missing values) but always passes through to
   // logs and audit when present.
   request_id: z.string().min(1).nullable().optional(),
+  // Phase 2 (WS2 visibility seam) — the parsed payload is what the worker
+  // reads, and Zod strips unknown keys by default, so `visibility` MUST be
+  // declared here or it would never survive assertServerGenerationJobPayload.
+  visibility: z.enum(['private', 'team', 'org']).nullable().optional(),
 });
 
 export const GenerateObservationsForEventJobSchema = baseFieldsSchema.extend({

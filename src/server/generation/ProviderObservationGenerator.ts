@@ -22,6 +22,7 @@ import {
   type ProcessGeneratedResponseOutcome,
 } from './processGeneratedResponse.js';
 import { PostgresServerSessionsRepository } from '../../storage/postgres/server-sessions.js';
+import { resolveDefaultVisibility } from '../../shared/visibility.js';
 
 // Phase 11 — sentinel exception class so the worker can distinguish
 // scope-violation/revoked-key failures from generic processor errors and
@@ -220,6 +221,12 @@ export class ProviderObservationGenerator {
         // generation_job_id reference back through to the original API key.
         apiKeyId: payload.api_key_id,
         actorId: payload.actor_id,
+        // Phase 2 — resolve the go-forward default visibility. A per-session or
+        // per-project override rides payload.visibility (stamped at ingest);
+        // otherwise the process env default (CLAUDE_MEM_DEFAULT_VISIBILITY) or
+        // built-in 'team' applies. resolveDefaultVisibility never throws.
+        visibility: payload.visibility
+          ?? resolveDefaultVisibility({ envValue: process.env.CLAUDE_MEM_DEFAULT_VISIBILITY ?? null }),
         sourceAdapter: payload.source_adapter,
         ...(this.options.workerId !== undefined ? { workerId: this.options.workerId } : {}),
       };
