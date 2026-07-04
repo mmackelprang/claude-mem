@@ -53,10 +53,23 @@ hostname `chroma` using the remote (HTTP) chroma-mcp client. The relevant env
 
 ### FTS escape hatch
 
-Set `CLAUDE_MEM_CHROMA_ENABLED=false` in `.env` to revert both app services to
-Postgres-FTS-only. In that mode the `chroma` service is unused (and
-`CHROMA_API_KEY` is no longer required); you can also drop the service entirely
-via a compose profile or by removing it from your override file.
+There are two levels to fall back to Postgres-FTS-only:
+
+1. **Recall level (keep the container, stop using it).** Set
+   `CLAUDE_MEM_CHROMA_ENABLED=false` on both app services. The app then neither
+   writes to nor reads from Chroma — all recall is Postgres FTS. **Note:** the
+   `chroma` service still starts and `CHROMA_API_KEY` is still required, because
+   `docker-compose.yml` references `${CHROMA_API_KEY:?…}` on all three services
+   and declares `depends_on: chroma` unconditionally — both are evaluated by
+   Docker Compose at parse/startup time, independent of the app-level flag. So
+   you must still supply any `CHROMA_API_KEY` value; the (now-idle) Chroma
+   container just goes unused.
+2. **Infra level (remove Chroma entirely).** To drop the `CHROMA_API_KEY`
+   requirement and stop the container, remove the `chroma` service, the
+   `chroma-data` volume, and — on both app services — the `CHROMA_*` env block
+   and the `depends_on: chroma` entry. The cleanest way is a compose **override
+   file** (`docker compose -f docker-compose.yml -f docker-compose.fts.yml up`)
+   that nulls those out, so the base file stays pilot-ready.
 
 ### Networking / security
 

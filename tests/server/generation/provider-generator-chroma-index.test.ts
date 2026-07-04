@@ -17,6 +17,7 @@ import {
 } from '../../../src/storage/postgres/index.js';
 import { ProviderObservationGenerator } from '../../../src/server/generation/ProviderObservationGenerator.js';
 import { ChromaSync } from '../../../src/services/sync/ChromaSync.js';
+import { ModeManager } from '../../../src/services/domain/ModeManager.js';
 import type { ServerGenerationProvider } from '../../../src/server/generation/providers/shared/types.js';
 import type { Job } from 'bullmq';
 import type { GenerateObservationsForEventJob } from '../../../src/server/jobs/types.js';
@@ -44,7 +45,11 @@ describe('ProviderObservationGenerator — Chroma write-side indexing (Phase 4)'
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
+  // Fresh pool per test (created in beforeEach). A module-level pool leaves idle
+  // connections whose search_path points at a prior test's DROP-CASCADE'd schema,
+  // so the generator's own pool query would hit public.observation_generation_jobs
+  // (which does not exist). Mirrors the route-wiring test's per-test pool.
+  let pool: pg.Pool;
   let client: PostgresPoolClient;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
@@ -56,9 +61,14 @@ describe('ProviderObservationGenerator — Chroma write-side indexing (Phase 4)'
   let addDocsSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
+    // The generation path parses provider XML via ModeManager.getActiveMode();
+    // load the real bundled `code` mode so this file runs standalone instead of
+    // relying on another test file's side effect (matches process-generated-response.test.ts).
+    ModeManager.getInstance().loadMode('code');
     priorChromaEnabled = process.env.CLAUDE_MEM_CHROMA_ENABLED;
     addDocsSpy = spyOn(ChromaSync.prototype, 'addDocuments').mockResolvedValue(1);
 
+    pool = new pg.Pool({ connectionString: testDatabaseUrl });
     client = await pool.connect();
     schemaName = `cm_p4_chroma_idx_${crypto.randomUUID().replaceAll('-', '_')}`;
     await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
@@ -94,6 +104,7 @@ describe('ProviderObservationGenerator — Chroma write-side indexing (Phase 4)'
       client.release();
     }
     pool.removeAllListeners('connect');
+    await pool.end();
   });
 
   function makeJob(): Job<GenerateObservationsForEventJob> {
