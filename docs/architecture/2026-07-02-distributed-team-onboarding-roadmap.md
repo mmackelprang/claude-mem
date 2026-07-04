@@ -146,6 +146,8 @@ ALTER TABLE observations
 
 So: **team observations are already being embedded into Chroma at write time, and a proven per-tenant Chroma vector-read path already exists in the SDK — but neither remote-facing read surface (`/v1/search`, `/v1/mcp`) calls it.** Every remote teammate gets FTS-only recall today. The vector capability is *built and wired on the write side and the SDK read side; unwired on the remote read surface.*
 
+> **Phase 4 build-time correction (write-side scope):** the "already written on write" claim above holds for the **cmem-sdk** `client.generate()` path only. The **deployed server-beta write path** — the BullMQ `ProviderObservationGenerator` that the Docker stack actually runs — did **not** index to Chroma (it wrote Postgres only). Phase 4 therefore also wired the write side (gated, degrade-not-throw) in `src/server/generation/ProviderObservationGenerator.ts`, so the pilot vector index is actually populated. The read-side wiring lives in `src/server/recall/ChromaObservationRecall.ts` (Chroma-first, Postgres-FTS fallback) with the Phase-2 visibility predicate mirrored onto the Chroma `where` filter.
+
 ### Build-vs-reuse decision: **REUSE.**
 The work is **wiring, not building.** Route `/v1/search` and the `RecallBackend.search`/`.context` through the already-proven Chroma path (`chromaSync` query with `$and:[{projectId},{teamId}]`, extended with `{actorId}` (Phase 1) and `{visibility}` (Phase 2) once those land), hydrating via `getByIdForScope`. Keep `PostgresObservationRepository.search()` (FTS) as the **graceful fallback** — the code already treats Chroma loss as *degraded, not catastrophic* (`sdk/index.ts:1040-1052` comment). No new ID scheme, no new embedding pipeline.
 
