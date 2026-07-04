@@ -51,3 +51,10 @@ TrueNAS SCALE gives two clean, host-safe options — pick after detecting SCALE 
 - **FINDING — CLI can't set actor:** `server api-key create` hardcoded `actor_id`. Fixed with a `--actor` flag (fork **PR #6**), redeployed, verified on pilot (`--actor teammate-carol` → `actor_id=teammate-carol`).
 - **Tailscale:** community app **v1.4.10** installed (`host_network: true`, hostname `claude-mem-nas`). **Awaiting Mark's interactive login click.** SECURITY NOTE: host networking exposes ALL NAS host ports to the tailnet — tighten with Tailscale ACLs or switch to Tailscale Serve (`:37877` only) as a follow-up.
 - **TODO:** Mark clicks login URL → verify `:37877` over the tailnet → mint a read-only teammate key + document day-1 onboarding.
+
+## COMPLETE (2026-07-04)
+- **Step 4 (Tailscale) DONE.** Interactive-login flow failed — the container's health check restarted it (29×) before any login URL could be clicked, minting a fresh URL each cycle. Switched to a **pre-auth key** (set as app `auth_key` via `app.update`): node came **online** immediately, restarts `29 → 0`, state persists on the `/var/lib/tailscale` bind mount.
+- **Reachable over the tailnet:** `http://truenas-scale.taila02f52.ts.net:37877` (IP `100.76.112.66`) → `/healthz` ok. (MagicDNS used the host name `truenas-scale`, not the configured `claude-mem-nas` — cosmetic.)
+- **Steps 6–7 DONE.** E2E validated (5/5); read-only teammate key minted (`/mnt/datapool/apps/claude-mem-pilot/teammate-readonly.key`); day-1 onboarding written → `docs/ops/2026-07-04-teammate-onboarding.md`.
+- **Pilot is functionally complete: a remote teammate can consume/contribute over Tailscale.**
+- **Open follow-ups:** (1) Tailscale ACLs / Serve to stop host-networking exposing all NAS ports; (2) provider key on `claude-mem-worker` to enable generation; (3) optional node rename to `claude-mem-nas`.
