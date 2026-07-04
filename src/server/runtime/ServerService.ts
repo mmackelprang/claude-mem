@@ -464,6 +464,22 @@ export function assertServerRuntimeForCli(
   }
 }
 
+// Phase 1 author attribution. `api-key create` historically hardcoded the
+// actor to `system:server-cli`, so every CLI-issued key resolved to the same
+// author via the `api_keys.actor_id` column (read back by
+// ServerV1PostgresRoutes#resolveActorId for audit + generation attribution).
+// The optional `--actor <id>` flag lets an operator provision teammate keys
+// with distinct author identities; absent the flag we keep the
+// backward-compatible `system:server-cli` default.
+export const DEFAULT_SERVER_CLI_ACTOR_ID = 'system:server-cli';
+
+export function resolveServerApiKeyCliActorId(
+  options: Record<string, string>,
+): string {
+  const actor = options.actor?.trim();
+  return actor ? actor : DEFAULT_SERVER_CLI_ACTOR_ID;
+}
+
 export async function runServerApiKeyCli(argv: string[]): Promise<void> {
   const sub = argv[0]?.toLowerCase();
   const options = parseFlagArgs(argv.slice(1));
@@ -510,6 +526,7 @@ export async function runServerApiKeyCli(argv: string[]): Promise<void> {
         teamId = result.teamId;
         projectId = result.projectId;
       }
+      const actorId = resolveServerApiKeyCliActorId(options);
       const rawKey = `cmem_${randomBytes(24).toString('hex')}`;
       const keyHash = createHash('sha256').update(rawKey).digest('hex');
       const created = await repo.createApiKey({
@@ -517,7 +534,7 @@ export async function runServerApiKeyCli(argv: string[]): Promise<void> {
         teamId,
         projectId,
         scopes,
-        actorId: 'system:server-cli',
+        actorId,
       });
       console.log(JSON.stringify({
         id: created.id,
@@ -526,6 +543,7 @@ export async function runServerApiKeyCli(argv: string[]): Promise<void> {
         teamId,
         projectId,
         scopes,
+        actorId,
       }, null, 2));
       return;
     }
