@@ -274,6 +274,30 @@ export class PostgresServerSessionsRepository {
   }
 
   /**
+   * Phase 2 (WS2 visibility seam) — flag a server session as private-scoped.
+   * A session that goes private via `<private-session />` stays private for its
+   * remainder (§4.3), so later turns inherit visibility='private'. Merges
+   * `{ privateSession: true }` into metadata via jsonb concat (`||`), scoped by
+   * (id, project_id, team_id). Idempotent: re-flagging is a no-op merge. Only
+   * ever called from the server ingest path (Postgres-only).
+   */
+  async markPrivateSession(input: {
+    id: string;
+    projectId: string;
+    teamId: string;
+  }): Promise<void> {
+    await this.client.query(
+      `
+        UPDATE server_sessions
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || '{"privateSession": true}'::jsonb,
+            updated_at = now()
+        WHERE id = $1 AND project_id = $2 AND team_id = $3
+      `,
+      [input.id, input.projectId, input.teamId]
+    );
+  }
+
+  /**
    * List events tied to this server_session that do NOT yet have a completed
    * observation_generation_jobs row. Tenant-scoped: rows are filtered by
    * (project_id, team_id) before any join.
