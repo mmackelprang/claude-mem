@@ -13,6 +13,7 @@ import { ServerSessionRuntimeRepository } from '../../../src/server/runtime/Serv
 import {
   buildEnqueueEventDecision,
   buildSummaryJobId,
+  buildSummaryJobPayload,
   resolveSessionGenerationPolicy,
 } from '../../../src/server/runtime/SessionGenerationPolicy.js';
 import { processSessionSummaryResponse } from '../../../src/server/generation/processGeneratedResponse.js';
@@ -77,6 +78,35 @@ describe('SessionGenerationPolicy (pure)', () => {
     expect(a).toBe(b);
     expect(a).not.toBe(c);
     expect(a).not.toContain(':');
+  });
+
+  // Phase 2 (WS2 visibility seam) — the summary lane must thread a private
+  // session's visibility onto its payload so the end-of-session SUMMARY
+  // observation is stamped 'private' rather than defaulting to 'team' and
+  // leaking to the team feed. Symmetric to the event lane.
+  it('buildSummaryJobPayload carries an explicit private visibility', () => {
+    const payload = buildSummaryJobPayload({
+      serverSessionId: 's1',
+      teamId: 't',
+      projectId: 'p',
+      generationJobId: 'j1',
+      visibility: 'private',
+    });
+    expect(payload.visibility).toBe('private');
+    expect(payload.kind).toBe('summary');
+    expect(payload.server_session_id).toBe('s1');
+  });
+
+  it('buildSummaryJobPayload defaults visibility to null when unset', () => {
+    const payload = buildSummaryJobPayload({
+      serverSessionId: 's1',
+      teamId: 't',
+      projectId: 'p',
+      generationJobId: 'j1',
+    });
+    // null (not undefined/'team') so the generator chokepoint resolves the
+    // config-driven default instead of the payload forcing a visibility.
+    expect(payload.visibility).toBeNull();
   });
 });
 
@@ -256,6 +286,27 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
       serverSessionId: session.id,
     });
     expect(unprocessed.map(e => e.id)).toEqual([eventB.id]);
+  });
+
+  it('markPrivateSession persists privateSession=true on session metadata (summary-lane inheritance)', async () => {
+    const session = await runtime.getActiveSession({
+      teamId,
+      projectId,
+      externalSessionId: 'ext-private',
+    });
+
+    const sessionsRepo = new PostgresServerSessionsRepository(client);
+    // Before: a fresh session is not private, so EndSessionService would resolve
+    // no visibility and the summary would default to 'team'.
+    const before = await sessionsRepo.getByIdForScope({ id: session.id, projectId, teamId });
+    expect((before?.metadata as Record<string, unknown>)?.privateSession).not.toBe(true);
+
+    await sessionsRepo.markPrivateSession({ id: session.id, projectId, teamId });
+
+    // After: the flag EndSessionService reads to stamp visibility='private' on the
+    // summary payload is present. This is the exact metadata field the fix keys on.
+    const after = await sessionsRepo.getByIdForScope({ id: session.id, projectId, teamId });
+    expect((after?.metadata as Record<string, unknown>)?.privateSession).toBe(true);
   });
 
   it('cross-tenant getById returns null', async () => {

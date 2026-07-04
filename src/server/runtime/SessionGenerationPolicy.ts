@@ -180,6 +180,11 @@ export interface BuildSummaryJobInput {
   sourceAdapter?: string | null;
   // Phase 12 — request correlation id flows into the summary lane too.
   requestId?: string | null;
+  // Phase 2 (WS2 visibility seam) — per-session visibility resolved at ingest
+  // (e.g. <private-session /> → 'private'). Threaded symmetrically to the event
+  // lane so the end-of-session SUMMARY observation never defaults to 'team' and
+  // leaks a private session to the team feed.
+  visibility?: import('../../shared/visibility.js').VisibilityLevel | null;
 }
 
 export function buildSummaryJobId(input: {
@@ -209,5 +214,9 @@ export function buildSummaryJobPayload(input: BuildSummaryJobInput): GenerateSes
     actor_id: input.actorId ?? null,
     source_adapter: input.sourceAdapter ?? 'api',
     request_id: input.requestId ?? null,
+    // Phase 2 — carry the resolved per-session visibility onto the summary
+    // payload (mirrors the event payload). Null when the session is not private;
+    // the generator chokepoint then resolves the config-driven default.
+    visibility: input.visibility ?? null,
   };
 }

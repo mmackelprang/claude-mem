@@ -45,6 +45,7 @@ import type {
 } from '../server/generation/providers/shared/types.js';
 import { processGeneratedResponse } from '../server/generation/processGeneratedResponse.js';
 import type { PostgresObservation } from '../storage/postgres/observations.js';
+import { resolveDefaultVisibility } from '../shared/visibility.js';
 
 // ---------------------------------------------------------------------------
 // Public type re-exports. Plan: plans/2026-05-25-cmem-sdk-and-server-rename.md §7
@@ -1016,6 +1017,13 @@ export async function createCmemClient(options: CmemClientOptions): Promise<Cmem
           rawText: providerResult.rawText,
           providerLabel: providerResult.providerLabel,
           sourceAdapter: 'sdk',
+          // WS2 Phase 2 — stamp the go-forward default visibility so SDK-path
+          // captures share the 'team' default rather than falling to
+          // processGeneratedResponse's fail-closed '?? private'. Mirrors the
+          // ProviderObservationGenerator chokepoint exactly.
+          visibility: resolveDefaultVisibility({
+            envValue: process.env.CLAUDE_MEM_DEFAULT_VISIBILITY ?? null,
+          }),
         };
         if (providerResult.modelId !== undefined) {
           persistInput.modelId = providerResult.modelId;
@@ -1091,6 +1099,14 @@ export async function createCmemClient(options: CmemClientOptions): Promise<Cmem
       }
       const limit = input.limit ?? 10;
       const query = typeof input.query === 'string' ? input.query : '';
+
+      // WS2 Phase 2 — per-reader visibility filtering on this SDK/Chroma read
+      // path (the empty-query listByProject below and the Chroma semantic +
+      // getByIdForScope hydration) is DEFERRED to Phase 4, which mirrors the
+      // Postgres `where` predicate onto Chroma metadata. The SDK has no
+      // per-request reader context, so viewerActorId is intentionally not wired
+      // here; the multi-user /v1 read surfaces already enforce it via
+      // PostgresObservationRepository.
 
       // Empty-query path — no semantic intent to express. Mirror the
       // SearchManager filter-only branch (SearchManager.ts:165-176) by
