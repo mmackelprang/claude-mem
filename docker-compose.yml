@@ -1,6 +1,7 @@
 # Phase 10 — server-beta deployable runtime.
 #
 # Stack: Postgres (canonical storage) + Valkey (BullMQ queue) +
+#        Chroma (vector recall index, Phase 4) +
 #        claude-mem-server (HTTP, no generation) +
 #        claude-mem-worker (BullMQ generation consumer).
 #
@@ -28,6 +29,9 @@
 #   POSTGRES_USER
 #   POSTGRES_PASSWORD
 #   POSTGRES_DB
+#   CHROMA_API_KEY   (required when Chroma is enabled — the default here;
+#                     set CLAUDE_MEM_CHROMA_ENABLED=false in .env to revert to
+#                     Postgres-FTS-only and the secret becomes unnecessary)
 #
 # #2558 — every long-running service declares `restart: unless-stopped` so a
 # crashed container (OOM, panic, transient dependency failure) is brought back
@@ -88,6 +92,30 @@ services:
       timeout: 3s
       retries: 12
 
+  # Phase 4 — vector recall index. The server + worker reach it over the
+  # in-network hostname `chroma` via chroma-mcp (CLAUDE_MEM_CHROMA_MODE=remote).
+  # SECURITY (H1/H3): the 8000 port is intentionally NOT published to the host
+  # (no `ports:`) — only the in-network app services can reach it. Token auth
+  # gates the HTTP port so it is never an open deployment (ADR 0001 §7.3).
+  chroma:
+    image: chromadb/chroma:latest
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+      # Token auth so Chroma is not an open deployment (ADR 0001 §7.3).
+      CHROMA_SERVER_AUTHN_PROVIDER: "chromadb.auth.token_authn.TokenAuthenticationServerProvider"
+      CHROMA_SERVER_AUTHN_CREDENTIALS: ${CHROMA_API_KEY:?CHROMA_API_KEY is required when Chroma is enabled}
+      CHROMA_AUTH_TOKEN_TRANSPORT_HEADER: "Authorization"
+    volumes:
+      - chroma-data:/data
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "cat < /dev/null > /dev/tcp/127.0.0.1/8000"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
   claude-mem-server:
     build:
       context: .
@@ -97,6 +125,8 @@ services:
       postgres:
         condition: service_healthy
       valkey:
+        condition: service_healthy
+      chroma:
         condition: service_healthy
     environment:
       CLAUDE_MEM_CONTAINER_MODE: server
@@ -118,7 +148,14 @@ services:
       CLAUDE_MEM_REDIS_MODE: docker
       CLAUDE_MEM_SERVER_DATABASE_URL: postgres://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       CLAUDE_MEM_AUTH_MODE: api-key
-      CLAUDE_MEM_CHROMA_ENABLED: "false"
+      # Phase 4 — vector recall ON by default for the pilot. Set
+      # CLAUDE_MEM_CHROMA_ENABLED=false in .env to revert to Postgres-FTS-only.
+      CLAUDE_MEM_CHROMA_ENABLED: ${CLAUDE_MEM_CHROMA_ENABLED:-true}
+      CLAUDE_MEM_CHROMA_MODE: remote
+      CLAUDE_MEM_CHROMA_HOST: chroma
+      CLAUDE_MEM_CHROMA_PORT: "8000"
+      CLAUDE_MEM_CHROMA_SSL: "false"
+      CLAUDE_MEM_CHROMA_API_KEY: ${CHROMA_API_KEY:?CHROMA_API_KEY is required when Chroma is enabled}
       # The HTTP service does not consume BullMQ jobs; the worker container
       # does. This split keeps HTTP latency unaffected by provider calls.
       CLAUDE_MEM_GENERATION_DISABLED: "true"
@@ -148,6 +185,8 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      chroma:
+        condition: service_healthy
       claude-mem-server:
         condition: service_healthy
     environment:
@@ -161,7 +200,16 @@ services:
       CLAUDE_MEM_REDIS_MODE: docker
       CLAUDE_MEM_SERVER_DATABASE_URL: postgres://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       CLAUDE_MEM_AUTH_MODE: api-key
-      CLAUDE_MEM_CHROMA_ENABLED: "false"
+      # Phase 4 — the worker indexes generated observations to the shared Chroma
+      # service on write. Same flag/host block as the server so both sides use
+      # one embedding function on one Chroma. Set CLAUDE_MEM_CHROMA_ENABLED=false
+      # in .env to revert to Postgres-FTS-only (no indexing).
+      CLAUDE_MEM_CHROMA_ENABLED: ${CLAUDE_MEM_CHROMA_ENABLED:-true}
+      CLAUDE_MEM_CHROMA_MODE: remote
+      CLAUDE_MEM_CHROMA_HOST: chroma
+      CLAUDE_MEM_CHROMA_PORT: "8000"
+      CLAUDE_MEM_CHROMA_SSL: "false"
+      CLAUDE_MEM_CHROMA_API_KEY: ${CHROMA_API_KEY:?CHROMA_API_KEY is required when Chroma is enabled}
       # Provider configuration. ANTHROPIC_API_KEY (or
       # CLAUDE_MEM_ANTHROPIC_API_KEY) is required for real generation; the
       # worker stays running but never produces observations without one.
@@ -180,3 +228,4 @@ volumes:
   claude-mem-data:
   postgres-data:
   valkey-data:
+  chroma-data:
