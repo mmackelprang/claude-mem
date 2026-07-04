@@ -17,6 +17,7 @@ import { isInternalProtocolPayload } from '../../utils/tag-stripping.js';
 import {
   resolveRuntimeContext as defaultResolveRuntimeContext,
   logServerFallback as defaultLogServerFallback,
+  selectRuntime as defaultSelectRuntime,
 } from '../../services/hooks/runtime-selector.js';
 import { isServerClientError } from '../../services/hooks/server-client.js';
 
@@ -40,6 +41,7 @@ const defaultDependencies = {
   resolveRuntimeContext: defaultResolveRuntimeContext,
   logServerFallback: defaultLogServerFallback,
   shouldTrackProject: defaultShouldTrackProject,
+  selectRuntime: defaultSelectRuntime,
 };
 
 let dependencies = defaultDependencies;
@@ -152,6 +154,16 @@ export const sessionInitHandler: EventHandler = {
       logger.info('HOOK', `INIT_COMPLETE | sessionDbId=${sessionDbId} | promptNumber=${promptNumber} | skipped=true | reason=private`, {
         sessionId: sessionDbId
       });
+      if (dependencies.selectRuntime() === 'server') {
+        // Phase 2 — positive confirmation that redaction worked (Designer handoff
+        // §9.2). systemMessage is the sanctioned channel; the handler stays pure.
+        // Worker/solo mode returns byte-for-byte as before (no systemMessage).
+        return {
+          continue: true,
+          suppressOutput: true,
+          systemMessage: '\n' + String.fromCodePoint(0x1F512) + ' Nothing captured from that message — it was marked private.\n',
+        };
+      }
       return { continue: true, suppressOutput: true };
     }
 

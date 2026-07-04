@@ -107,6 +107,53 @@ describe('server beta postgres schema bootstrap', () => {
     // version-2 migration recorded
     expect(queries.some(q => q.includes('server_beta_schema_migrations'))).toBe(true);
   });
+
+  it('bootstraps the Phase 2 visibility column, index, and one-time private backfill', async () => {
+    const queries: string[] = [];
+    const client = {
+      async query(text: string) {
+        queries.push(text);
+        // version-3 not yet present -> exercise the guarded backfill branch
+        if (text.includes('WHERE version = $1')) return { rows: [], rowCount: 0 };
+        return { rows: [], rowCount: 0 };
+      }
+    } as unknown as PostgresPoolClient;
+
+    await bootstrapServerPostgresSchema(client);
+    const sql = queries.join('\n');
+
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL');
+    expect(sql).toContain("CHECK (visibility IN ('private','team','org'))");
+    expect(sql).toContain('idx_observations_visibility');
+    expect(sql).toContain("UPDATE observations SET visibility = 'private'");
+    expect(queries.some(q => q.includes('server_beta_schema_migrations') && q.includes('$1'))).toBe(true);
+    // additive-only: no destructive ops on the new column
+    expect(sql).not.toContain('DROP COLUMN visibility');
+  });
+
+  it('skips the one-time private backfill when schema version 3 already exists', async () => {
+    const queries: string[] = [];
+    const client = {
+      async query(text: string) {
+        queries.push(text);
+        // version-3 already present -> the guard reports a matching row, so the
+        // one-time backfill (and its version-3 INSERT) MUST be skipped.
+        if (text.includes('WHERE version = $1')) {
+          return { rows: [{ '?column?': 1 }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }
+    } as unknown as PostgresPoolClient;
+
+    await bootstrapServerPostgresSchema(client);
+    const sql = queries.join('\n');
+
+    // The idempotent DDL (ADD COLUMN / index) still runs every boot...
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL');
+    expect(sql).toContain('idx_observations_visibility');
+    // ...but the destructive one-time mass-flip is NOT re-run.
+    expect(sql).not.toContain("UPDATE observations SET visibility = 'private'");
+  });
 });
 
 describe('server beta postgres observation storage', () => {

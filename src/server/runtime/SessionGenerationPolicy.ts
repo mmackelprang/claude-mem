@@ -70,6 +70,10 @@ export interface EnqueueEventDecisionInput {
   sourceAdapter?: string | null;
   // Phase 12 — request correlation id minted at the HTTP boundary.
   requestId?: string | null;
+  // Phase 2 (WS2 visibility seam) — per-session visibility resolved at ingest
+  // (e.g. <private-session /> → 'private'). Threaded so the immediately-enqueued
+  // BullMQ job.data carries it (the worker reads job.data, not the outbox row).
+  visibility?: import('../jobs/types.js').ServerGenerationJobPayload['visibility'];
 }
 
 export interface EnqueueEventDecision {
@@ -104,6 +108,9 @@ export function buildEnqueueEventDecision(
     actor_id: input.actorId ?? null,
     source_adapter: input.sourceAdapter ?? input.event.sourceAdapter ?? 'api',
     request_id: input.requestId ?? null,
+    // Phase 2 — only present when the session is private; otherwise omitted so
+    // the generator chokepoint resolves the config-driven default.
+    ...(input.visibility ? { visibility: input.visibility } : {}),
   };
 
   if (resolved.policy === 'end-of-session') {
@@ -173,6 +180,11 @@ export interface BuildSummaryJobInput {
   sourceAdapter?: string | null;
   // Phase 12 — request correlation id flows into the summary lane too.
   requestId?: string | null;
+  // Phase 2 (WS2 visibility seam) — per-session visibility resolved at ingest
+  // (e.g. <private-session /> → 'private'). Threaded symmetrically to the event
+  // lane so the end-of-session SUMMARY observation never defaults to 'team' and
+  // leaks a private session to the team feed.
+  visibility?: import('../../shared/visibility.js').VisibilityLevel | null;
 }
 
 export function buildSummaryJobId(input: {
@@ -202,5 +214,9 @@ export function buildSummaryJobPayload(input: BuildSummaryJobInput): GenerateSes
     actor_id: input.actorId ?? null,
     source_adapter: input.sourceAdapter ?? 'api',
     request_id: input.requestId ?? null,
+    // Phase 2 — carry the resolved per-session visibility onto the summary
+    // payload (mirrors the event payload). Null when the session is not private;
+    // the generator chokepoint then resolves the config-driven default.
+    visibility: input.visibility ?? null,
   };
 }

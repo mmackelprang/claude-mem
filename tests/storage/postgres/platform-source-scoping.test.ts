@@ -215,12 +215,17 @@ describe('server-beta Postgres platform source scoping', () => {
     expect(client.calls[0].text).toContain('agent_events.platform_source = $5');
     // WS2 Phase 1 — optional author filter is a 6th param, null when omitted.
     expect(client.calls[0].text).toContain('observations.actor_id = $6');
+    // WS2 Phase 2 — reader-scoped visibility predicate is a 7th param, null when
+    // omitted (team/org only). The private branch reads the reader's actor via $7.
+    expect(client.calls[0].text).toContain("observations.visibility IN ('team','org')");
+    expect(client.calls[0].text).toContain('observations.actor_id = $7');
     expect(client.calls[0].values).toEqual([
       'project-1',
       'team-1',
       'auth bug',
       7,
       'cursor',
+      null,
       null,
     ]);
   });

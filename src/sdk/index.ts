@@ -45,6 +45,7 @@ import type {
 } from '../server/generation/providers/shared/types.js';
 import { processGeneratedResponse } from '../server/generation/processGeneratedResponse.js';
 import type { PostgresObservation } from '../storage/postgres/observations.js';
+import { resolveDefaultVisibility } from '../shared/visibility.js';
 
 // ---------------------------------------------------------------------------
 // Public type re-exports. Plan: plans/2026-05-25-cmem-sdk-and-server-rename.md §7
@@ -678,6 +679,11 @@ async function indexObservationsToChroma(
       // metadata-absent via ChromaSync's clean step, so a null/local author
       // indexes as author-absent rather than a meaningless empty value.
       actorId: observation.actorId ?? '',
+      // WS2 Phase 2 — visibility dimension for Chroma `where` filtering. Phase 4
+      // wires the /v1 read surfaces to the Chroma path and adds the `where`
+      // mirror of the Postgres predicate (§3.1). Always non-empty (enum,
+      // NOT NULL), so it indexes as a real filterable value.
+      visibility: observation.visibility ?? 'team',
       // ChromaSync's clean step filters out empty strings (ChromaSync.ts:291-295),
       // so passing '' for missing server_session_id collapses cleanly to
       // metadata-absent rather than indexing a meaningless empty value.
@@ -1011,6 +1017,13 @@ export async function createCmemClient(options: CmemClientOptions): Promise<Cmem
           rawText: providerResult.rawText,
           providerLabel: providerResult.providerLabel,
           sourceAdapter: 'sdk',
+          // WS2 Phase 2 — stamp the go-forward default visibility so SDK-path
+          // captures share the 'team' default rather than falling to
+          // processGeneratedResponse's fail-closed '?? private'. Mirrors the
+          // ProviderObservationGenerator chokepoint exactly.
+          visibility: resolveDefaultVisibility({
+            envValue: process.env.CLAUDE_MEM_DEFAULT_VISIBILITY ?? null,
+          }),
         };
         if (providerResult.modelId !== undefined) {
           persistInput.modelId = providerResult.modelId;
@@ -1086,6 +1099,14 @@ export async function createCmemClient(options: CmemClientOptions): Promise<Cmem
       }
       const limit = input.limit ?? 10;
       const query = typeof input.query === 'string' ? input.query : '';
+
+      // WS2 Phase 2 — per-reader visibility filtering on this SDK/Chroma read
+      // path (the empty-query listByProject below and the Chroma semantic +
+      // getByIdForScope hydration) is DEFERRED to Phase 4, which mirrors the
+      // Postgres `where` predicate onto Chroma metadata. The SDK has no
+      // per-request reader context, so viewerActorId is intentionally not wired
+      // here; the multi-user /v1 read surfaces already enforce it via
+      // PostgresObservationRepository.
 
       // Empty-query path — no semantic intent to express. Mirror the
       // SearchManager filter-only branch (SearchManager.ts:165-176) by

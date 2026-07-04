@@ -75,6 +75,16 @@ export class EndSessionService {
       // operator retry can re-enqueue a payload that passes the worker's
       // assertServerGenerationJobPayload validation.
       const outboxId = newId();
+      // Phase 2 (WS2 visibility seam) — a session flagged private via
+      // <private-session /> persists `metadata.privateSession = true` on the
+      // server_sessions row (see PostgresServerSessionsRepository.markPrivateSession).
+      // Read it here and thread it onto the summary payload so the end-of-session
+      // SUMMARY observation is stamped 'private' rather than defaulting to 'team'
+      // and leaking to the team feed (fail-safe, symmetric to the event lane).
+      const sessionVisibility =
+        (ended.metadata as Record<string, unknown> | null | undefined)?.privateSession === true
+          ? 'private'
+          : undefined;
       const summaryPayload = buildSummaryJobPayload({
         serverSessionId: ended.id,
         teamId: ended.teamId,
@@ -83,6 +93,7 @@ export class EndSessionService {
         apiKeyId: input.apiKeyId ?? null,
         actorId: input.actorId ?? null,
         sourceAdapter: input.sourceAdapter ?? null,
+        visibility: sessionVisibility,
       });
       const outbox = await jobsRepo.create({
         id: outboxId,
@@ -132,6 +143,12 @@ export class EndSessionService {
       teamId: outbox.teamId,
       projectId: outbox.projectId,
     });
+    // Phase 2 — the persisted outbox payload is canonical for visibility (it was
+    // stamped inside the end() tx from the session's privateSession flag). Read it
+    // back so the immediately-enqueued BullMQ job.data carries the same visibility
+    // the reconciliation path would re-enqueue. Mirrors IngestEventsService.publishEventJob.
+    const persistedVisibility =
+      (outbox.payload as { visibility?: 'private' | 'team' | 'org' | null } | undefined)?.visibility ?? undefined;
     const payload: GenerateSessionSummaryJob = buildSummaryJobPayload({
       serverSessionId,
       teamId: outbox.teamId,
@@ -140,6 +157,7 @@ export class EndSessionService {
       apiKeyId: input.apiKeyId ?? null,
       actorId: input.actorId ?? null,
       sourceAdapter: input.sourceAdapter ?? null,
+      visibility: persistedVisibility,
     });
     try {
       await queue.add(jobId, payload);

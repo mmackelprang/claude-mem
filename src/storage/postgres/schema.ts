@@ -2,7 +2,7 @@
 
 import type { PostgresQueryable } from './utils.js';
 
-export const SERVER_POSTGRES_SCHEMA_VERSION = 2;
+export const SERVER_POSTGRES_SCHEMA_VERSION = 3;
 
 // Phase 1b (cmem-sdk rename): the TS constant is renamed but the table-name
 // strings remain on `server_beta_*` since they are persisted DDL identifiers.
@@ -54,6 +54,28 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
       `,
       [2, 'phase 1 author seam: actor_id + api_key_id on observations/agent_events']
     );
+    // Phase 2 visibility seam — one-time private backfill, guarded so it runs
+    // exactly once. The ADD COLUMN above stamped every existing row with the
+    // 'team' default; those rows are pre-visibility HISTORY, captured before any
+    // sharing intent existed, so we flip them all to 'private' (fail-safe:
+    // private-by-mistake beats leaked). Runs inside this startup transaction
+    // before the server accepts writes, so no legitimate go-forward 'team' row
+    // can be caught. On a fresh pilot DB the UPDATE matches 0 rows (no-op).
+    const phase2Applied = await client.query(
+      'SELECT 1 FROM server_beta_schema_migrations WHERE version = $1',
+      [3]
+    );
+    if (phase2Applied.rowCount === 0) {
+      await client.query(`UPDATE observations SET visibility = 'private'`);
+      await client.query(
+        `
+          INSERT INTO server_beta_schema_migrations (version, description)
+          VALUES ($1, $2)
+          ON CONFLICT (version) DO NOTHING
+        `,
+        [3, 'phase 2 visibility seam: visibility enum + one-time private backfill of pre-visibility rows']
+      );
+    }
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -352,4 +374,17 @@ ALTER TABLE agent_events ADD COLUMN IF NOT EXISTS api_key_id TEXT
 CREATE INDEX IF NOT EXISTS idx_observations_actor
   ON observations(team_id, project_id, actor_id)
   WHERE actor_id IS NOT NULL;
+
+-- Phase 2 (WS2 visibility seam, ADR 0001 section 8 / Designer handoff 2026-07-02) --
+-- per-observation visibility scoping for team memory. Additive, defaulted,
+-- non-destructive. DEFAULT 'team' makes go-forward team captures shared by
+-- default (the point of team mode); the one-time backfill in
+-- bootstrapServerPostgresSchema flips pre-visibility history to 'private'.
+-- 'org' is a forward-compatible enum value only (federation is reserved) and
+-- is inert in Phase 2. Local worker mode never runs this schema (Postgres-only).
+-- Idempotent so an existing server DB upgrades in place.
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL
+  DEFAULT 'team' CHECK (visibility IN ('private','team','org'));
+CREATE INDEX IF NOT EXISTS idx_observations_visibility
+  ON observations(team_id, project_id, visibility);
 `;

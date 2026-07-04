@@ -57,6 +57,11 @@ export interface ProcessGeneratedResponseInput {
   // observation.created audit row.
   apiKeyId?: string | null;
   actorId?: string | null;
+  // Phase 2 (WS2 visibility seam) — resolved go-forward visibility for the
+  // captured observations. Stamped by the generator chokepoint (a per-session
+  // 'private' override rides through, else the config default). Fails closed to
+  // 'private' at the create() site if a caller ever omits it entirely.
+  visibility?: import('../../shared/visibility.js').VisibilityLevel | null;
   sourceAdapter?: string | null;
   // Provider tokens this job spent (from the generate() result), for cost metering.
   tokensUsed?: number;
@@ -151,6 +156,7 @@ export async function processGeneratedResponse(
         createdByJobId: fresh.id,
         actorId: input.actorId ?? null,
         apiKeyId: input.apiKeyId ?? null,
+        visibility: input.visibility ?? 'private',
       });
       persisted.push(observation);
 
@@ -445,6 +451,7 @@ export async function processSessionSummaryResponse(
           createdByJobId: fresh.id,
           actorId: input.actorId ?? null,
           apiKeyId: input.apiKeyId ?? null,
+          visibility: input.visibility ?? 'private',
         });
         persisted.push(observation);
 
