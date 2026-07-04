@@ -2,7 +2,6 @@
 import { logger } from './logger.js';
 
 const TAG_NAMES = [
-  'private',
   'claude-mem-context',
   'system_instruction',
   'system-instruction',
@@ -16,19 +15,34 @@ const STRIP_REGEX = new RegExp(
   'g'
 );
 
+// Phase 2 fail-safe (Designer handoff §2): the WRAPPING form of ANY
+// `private`-prefixed tag redacts — <private>…</private>,
+// <private-session>…</private-session>, <private-anything>…</private-anything>.
+// The backreference `</\1>` requires a closing tag, so the self-closing
+// visibility switch `<private-session />` never matches here. This guarantees
+// the dangerous confusion direction always fails toward redaction (safe).
+const PRIVATE_WRAP_REGEX = /<(private[a-z0-9_-]*)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
 export const SYSTEM_REMINDER_REGEX = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
 const MAX_TAG_COUNT = 100;
 
-export function stripTags(input: string): { stripped: string; counts: Record<TagName, number> } {
-  const counts: Record<TagName, number> = Object.fromEntries(
+export function stripTags(input: string): { stripped: string; counts: Record<string, number> } {
+  const counts: Record<string, number> = Object.fromEntries(
     TAG_NAMES.map(name => [name, 0])
-  ) as Record<TagName, number>;
+  ) as Record<string, number>;
+  counts.private = 0;
 
-  STRIP_REGEX.lastIndex = 0; 
-
+  PRIVATE_WRAP_REGEX.lastIndex = 0;
   let total = 0;
-  const stripped = input.replace(STRIP_REGEX, (_, name: TagName) => {
+  const withoutPrivate = input.replace(PRIVATE_WRAP_REGEX, () => {
+    counts.private += 1;
+    total += 1;
+    return '';
+  });
+
+  STRIP_REGEX.lastIndex = 0;
+  const stripped = withoutPrivate.replace(STRIP_REGEX, (_, name: TagName) => {
     counts[name] = (counts[name] ?? 0) + 1;
     total += 1;
     return '';
