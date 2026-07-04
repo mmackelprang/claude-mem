@@ -1005,6 +1005,61 @@ export class ChromaSync {
     return { ids, distances, metadatas };
   }
 
+  /**
+   * WS2 Phase 4 — UUID-safe scope query for server/team mode. Unlike
+   * queryChroma(), this does NOT parse doc ids through the obs_<int>_ regex —
+   * it returns the raw string doc ids (Postgres observation UUIDs) so
+   * server-mode results are never silently dropped (the
+   * deduplicateQueryResults UUID-drop, ChromaSync.ts:978). Collection lifecycle
+   * stays owned by ChromaSync; only the parse differs. The legacy queryChroma /
+   * deduplicateQueryResults numeric contract is left byte-for-byte unchanged for
+   * the worker ChromaSearchStrategy.
+   */
+  async queryChromaByScope(input: {
+    query: string;
+    limit: number;
+    where?: Record<string, unknown>;
+  }): Promise<{ ids: string[]; distances: number[]; metadatas: Array<Record<string, unknown> | null> }> {
+    await this.ensureCollectionExists();
+    const chromaMcp = ChromaMcpManager.getInstance();
+    const results = await chromaMcp.callTool('chroma_query_documents', {
+      collection_name: this.collectionName,
+      query_texts: [input.query],
+      n_results: input.limit,
+      ...(input.where && { where: input.where }),
+      include: ['documents', 'metadatas', 'distances'],
+    }) as {
+      ids?: string[][];
+      metadatas?: Array<Array<Record<string, unknown> | null>>;
+      distances?: number[][];
+    };
+    return this.deduplicateQueryResultsRaw(results);
+  }
+
+  /** String-id dedup — preserves UUID doc ids verbatim, order-stable. */
+  private deduplicateQueryResultsRaw(results: {
+    ids?: string[][];
+    metadatas?: Array<Array<Record<string, unknown> | null>>;
+    distances?: number[][];
+  }): { ids: string[]; distances: number[]; metadatas: Array<Record<string, unknown> | null> } {
+    const docIds = results?.ids?.[0] ?? [];
+    const rawMetadatas = results?.metadatas?.[0] ?? [];
+    const rawDistances = results?.distances?.[0] ?? [];
+    const ids: string[] = [];
+    const metadatas: Array<Record<string, unknown> | null> = [];
+    const distances: number[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < docIds.length; i++) {
+      const docId = docIds[i];
+      if (typeof docId !== 'string' || seen.has(docId)) continue;
+      seen.add(docId);
+      ids.push(docId);
+      metadatas.push(rawMetadatas[i] ?? null);
+      distances.push(rawDistances[i] ?? 0);
+    }
+    return { ids, distances, metadatas };
+  }
+
   /** Maximum number of concurrent project backfills to run at once. */
   private static readonly BACKFILL_CONCURRENCY_LIMIT = 3;
 
