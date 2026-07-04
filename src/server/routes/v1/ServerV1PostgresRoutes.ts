@@ -37,6 +37,7 @@ import { EndSessionService } from '../../services/EndSessionService.js';
 import { normalizePlatformSource, normalizePlatformSourceOrNull } from '../../../shared/platform-source.js';
 import { resolveDefaultVisibility } from '../../../shared/visibility.js';
 import { humanizeActor } from '../../../shared/actor-display.js';
+import { ChromaObservationRecall } from '../../recall/ChromaObservationRecall.js';
 
 const SOURCE_ADAPTER_DEFAULT = 'api';
 
@@ -68,6 +69,9 @@ export interface ServerV1PostgresRoutesOptions {
   getEventQueue?: () => ReturnType<ActiveServerQueueManager['getQueue']> | null;
   getSummaryQueue?: () => ReturnType<ActiveServerQueueManager['getQueue']> | null;
   sessionPolicy?: ServerSessionGenerationPolicy;
+  // Phase 4 — injected so tests can pass an FTS-only (chromaEnabled:false)
+  // recall. When omitted, the routes construct one gated on the env flag.
+  chromaRecall?: ChromaObservationRecall;
 }
 
 interface BatchPreValidationFailure {
@@ -123,6 +127,11 @@ async function waitForTerminalJob(
 export class ServerV1PostgresRoutes implements RouteHandler {
   private readonly ingestEvents: IngestEventsService;
   private readonly endSession: EndSessionService;
+  // Phase 4 — Chroma-first vector recall (with Postgres-FTS fallback) for the
+  // /v1 read surfaces. Gated on CLAUDE_MEM_CHROMA_ENABLED === 'true' (strict,
+  // default OFF) so existing server deploys and unit tests stay FTS-only until
+  // an operator opts in.
+  private readonly recall: ChromaObservationRecall;
   // Request-scoped memo for resolveActorId(): a single write request now stamps
   // the memory/agent_event row AND writes an audit_log row, both of which resolve
   // actor_id from the same api_keys id. Cache per-request so we do one SELECT, and
@@ -143,6 +152,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
     this.endSession = new EndSessionService({
       pool: options.pool,
       resolveSummaryQueue: () => this.resolveQueue('summary') as never,
+    });
+    this.recall = options.chromaRecall ?? new ChromaObservationRecall({
+      pool: options.pool,
+      chromaEnabled: process.env.CLAUDE_MEM_CHROMA_ENABLED === 'true',
     });
   }
 
@@ -973,27 +986,30 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
         const platformSource = normalizePlatformSourceOrNull(body.platformSource);
         try {
-          const repo = new PostgresObservationRepository(this.options.pool);
-          const results = await repo.search({
+          const result = await this.recall.search({
             projectId: body.projectId,
             teamId,
             query: body.query,
             limit: body.limit ?? 20,
-            platformSource,
-            actorId: body.actorId ?? null,
-            viewerActorId: await this.resolveActorId(req),
+            filter: {
+              platformSource,
+              actorId: body.actorId ?? null,
+              viewerActorId: await this.resolveActorId(req),
+            },
           });
           await this.auditRead(req, 'observation.read', null, body.projectId, {
             mode: 'search',
+            via: result.chroma ? 'chroma' : 'fts',
+            degraded: result.degraded,
             query: body.query,
             limit: body.limit ?? 20,
             platformSource,
             actorId: body.actorId ?? null,
-            resultCount: results.length,
-            observationIds: results.map(o => o.id),
+            resultCount: result.observations.length,
+            observationIds: result.observations.map(o => o.id),
           });
           res.status(200).json({
-            observations: results.map(serializeObservation),
+            observations: result.observations.map(serializeObservation),
           });
         } catch (error) {
           this.handleDbError(error, res, 'observation.search');
@@ -1019,31 +1035,34 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
         const platformSource = normalizePlatformSourceOrNull(body.platformSource);
         try {
-          const repo = new PostgresObservationRepository(this.options.pool);
-          const results = await repo.search({
+          const result = await this.recall.search({
             projectId: body.projectId,
             teamId,
             query: body.query,
             limit: body.limit ?? 10,
-            platformSource,
-            actorId: body.actorId ?? null,
-            viewerActorId: await this.resolveActorId(req),
+            filter: {
+              platformSource,
+              actorId: body.actorId ?? null,
+              viewerActorId: await this.resolveActorId(req),
+            },
           });
-          const context = results
+          const context = result.observations
             .map(observation => observation.content)
             .filter(text => typeof text === 'string' && text.length > 0)
             .join('\n\n');
           await this.auditRead(req, 'observation.read', null, body.projectId, {
             mode: 'context',
+            via: result.chroma ? 'chroma' : 'fts',
+            degraded: result.degraded,
             query: body.query,
             limit: body.limit ?? 10,
             platformSource,
             actorId: body.actorId ?? null,
-            resultCount: results.length,
-            observationIds: results.map(o => o.id),
+            resultCount: result.observations.length,
+            observationIds: result.observations.map(o => o.id),
           });
           res.status(200).json({
-            observations: results.map(serializeObservation),
+            observations: result.observations.map(serializeObservation),
             context,
           });
         } catch (error) {
@@ -1076,22 +1095,24 @@ export class ServerV1PostgresRoutes implements RouteHandler {
       const backend: RecallBackend = {
         search: async ({ projectId, query, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit, viewerActorId });
+          // Phase 4 — Chroma-first recall with FTS fallback, same visibility
+          // predicate as POST /v1/search via filter.viewerActorId.
+          const result = await this.recall.search({ projectId, teamId, query, limit, filter: { viewerActorId } });
           // Audit the read, same as POST /v1/search — the MCP path is no exception.
           await this.auditRead(req, 'observation.read', null, projectId, {
-            mode: 'search', via: 'mcp', query, limit,
-            resultCount: rows.length, observationIds: rows.map(o => o.id),
+            mode: 'search', via: result.chroma ? 'chroma' : 'fts', degraded: result.degraded, query, limit,
+            resultCount: result.observations.length, observationIds: result.observations.map(o => o.id),
           });
-          return rows.map(serializeObservation);
+          return result.observations.map(serializeObservation);
         },
         context: async ({ projectId, query, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit, viewerActorId });
+          const result = await this.recall.search({ projectId, teamId, query, limit, filter: { viewerActorId } });
           await this.auditRead(req, 'observation.read', null, projectId, {
-            mode: 'context', via: 'mcp', query, limit,
-            resultCount: rows.length, observationIds: rows.map(o => o.id),
+            mode: 'context', via: result.chroma ? 'chroma' : 'fts', degraded: result.degraded, query, limit,
+            resultCount: result.observations.length, observationIds: result.observations.map(o => o.id),
           });
-          return rows.map(serializeObservation);
+          return result.observations.map(serializeObservation);
         },
         recent: async ({ projectId, limit }) => {
           assertProjectAllowed(projectId);

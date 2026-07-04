@@ -28,7 +28,8 @@ import {
   type PostgresStorageRepositories,
 } from '../storage/postgres/index.js';
 import type { CreatePostgresAgentEventInput } from '../storage/postgres/agent-events.js';
-import { ChromaSync, type ChromaDocument } from '../services/sync/ChromaSync.js';
+import { ChromaSync } from '../services/sync/ChromaSync.js';
+import { buildObservationChromaDocs } from '../services/sync/observation-chroma-docs.js';
 import { ChromaMcpManager } from '../services/sync/ChromaMcpManager.js';
 import { logger } from '../utils/logger.js';
 import { IngestEventsService } from '../server/services/IngestEventsService.js';
@@ -667,35 +668,12 @@ async function indexObservationsToChroma(
   scope: { projectId: string; teamId: string },
 ): Promise<void> {
   if (observations.length === 0) return;
-  const docs: ChromaDocument[] = observations.map(observation => {
-    const metadata: Record<string, string | number> = {
-      projectId: scope.projectId,
-      teamId: scope.teamId,
-      kind: observation.kind,
-      observationId: observation.id,
-      observationType: observation.kind,
-      // WS2 Phase 1 — author dimension for Chroma `where` filtering (Phase 4
-      // wires the /v1 read surfaces to this path). Empty string collapses to
-      // metadata-absent via ChromaSync's clean step, so a null/local author
-      // indexes as author-absent rather than a meaningless empty value.
-      actorId: observation.actorId ?? '',
-      // WS2 Phase 2 — visibility dimension for Chroma `where` filtering. Phase 4
-      // wires the /v1 read surfaces to the Chroma path and adds the `where`
-      // mirror of the Postgres predicate (§3.1). Always non-empty (enum,
-      // NOT NULL), so it indexes as a real filterable value.
-      visibility: observation.visibility ?? 'team',
-      // ChromaSync's clean step filters out empty strings (ChromaSync.ts:291-295),
-      // so passing '' for missing server_session_id collapses cleanly to
-      // metadata-absent rather than indexing a meaningless empty value.
-      serverSessionId: observation.serverSessionId ?? '',
-      createdAt: new Date(observation.createdAtEpoch).toISOString(),
-    };
-    return {
-      id: observation.id,
-      document: observation.content,
-      metadata,
-    };
-  });
+  // WS2 Phase 4 — delegate the doc shape to the shared builder so index-time
+  // metadata (projectId/teamId/actorId/serverSessionId/kind/visibility/createdAt)
+  // can never drift from what the read-side `where` filter expects. The builder
+  // emits metadata.visibility whenever the row carries a value; live Postgres
+  // rows always do (NOT NULL, default 'team').
+  const docs = buildObservationChromaDocs(observations, scope);
   try {
     await chromaSync.addDocuments(docs);
   } catch (err) {

@@ -182,11 +182,18 @@ describe('POST /v1/mcp — remote authenticated MCP recall (streamable HTTP)', (
       `SELECT details FROM audit_log WHERE team_id = $1 AND action = 'observation.read'`,
       [teamId],
     );
-    const modes = audit.rows.map((r: { details: { via?: string; mode?: string } }) =>
-      r.details?.via === 'mcp' ? r.details?.mode : null,
-    ).filter(Boolean);
-    expect(modes).toContain('recent');
-    expect(modes).toContain('context');
+    const details = audit.rows.map(
+      (r: { details: { via?: string; mode?: string; degraded?: boolean } }) => r.details,
+    );
+    // Phase 4 — `recent` still audits via:'mcp'; search/context now flow through
+    // the recall path, so they audit via:'fts' when Chroma is disabled (the test
+    // default) or via:'chroma' when the vector path served the rows.
+    const recentRow = details.find((d) => d?.mode === 'recent');
+    const contextRow = details.find((d) => d?.mode === 'context');
+    expect(recentRow?.via).toBe('mcp');
+    expect(contextRow).toBeTruthy();
+    expect(['fts', 'chroma']).toContain(contextRow?.via);
+    expect(contextRow?.degraded).toBe(false);
   });
 
   it('rejects an unauthenticated connection (no key → 401)', async () => {
