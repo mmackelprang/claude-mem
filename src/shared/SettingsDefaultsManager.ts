@@ -76,6 +76,10 @@ export interface SettingsDefaults {
   CLAUDE_MEM_QUEUE_REDIS_PREFIX: string;
   CLAUDE_MEM_AUTH_MODE: string;
   CLAUDE_MEM_RUNTIME: string;
+  // Phase 2 (WS2 visibility seam) — go-forward default visibility for team-mode
+  // captures. '' = unset = built-in 'team'. 'private' inverts to opt-in-to-share.
+  // Ignored entirely in worker/solo mode (single user; no sharing to default).
+  CLAUDE_MEM_DEFAULT_VISIBILITY: string;
   // Phase 1a (cmem-sdk rename): canonical server settings keys. Hooks read
   // these first and fall back to the legacy `*_BETA_*` keys below.
   CLAUDE_MEM_SERVER_URL: string;
@@ -160,6 +164,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_QUEUE_REDIS_PREFIX: `claude_mem_${process.env.CLAUDE_MEM_WORKER_PORT ?? String(37700 + ((process.getuid?.() ?? 77) % 100))}`,
     CLAUDE_MEM_AUTH_MODE: 'api-key',
     CLAUDE_MEM_RUNTIME: 'worker',
+    CLAUDE_MEM_DEFAULT_VISIBILITY: '',       // Phase 2 — '' = unset = built-in 'team'; 'private' inverts to opt-in-to-share. Ignored in worker mode.
     // Phase 1a (cmem-sdk rename): canonical server settings keys. Hooks read
     // these first; the legacy `*_BETA_*` defaults below remain so existing
     // settings.json files still resolve correctly.
