@@ -43,3 +43,11 @@ TrueNAS SCALE gives two clean, host-safe options — pick after detecting SCALE 
 - Host-mutating commands get Mark's explicit OK before running.
 - Tailscale auth key treated as a secret: point-of-use paste, ephemeral, revoked after.
 - Detection pass (step 3) is read-only — no changes to the NAS until Option A/B is chosen with Mark.
+
+## Progress & findings (2026-07-04)
+- **Steps 2–6 DONE.** Server-beta is live as managed TrueNAS **custom app `claude-mem`** (postgres+valkey+server+worker, all healthy); reachable on LAN at `nas.lan:37877`. Image built locally (`claude-mem-server:pilot`, `pull_policy: missing`); DB secrets generated on-NAS in the compose (never in transcript).
+- **FINDING — stale server bundle:** Phase 1's merge (PR #4) reverted the server-bundle rebuild, so the deployable shipped at schema **v1**. Fixed by rebuilding the bundle (fork **PR #5**) + redeploy → schema **v2**. **Lesson:** "regenerate `plugin/scripts/server-service.cjs`" must be a standing post-merge step — a source-only merge leaves the deployable stale.
+- **E2E on the live server: 5/5 PASS** — auth enforced (401/403/200), Phase 0 scope fix, Phase 1 author attribution (no cross-actor leak), in-place v1→v2 migration.
+- **FINDING — CLI can't set actor:** `server api-key create` hardcoded `actor_id`. Fixed with a `--actor` flag (fork **PR #6**), redeployed, verified on pilot (`--actor teammate-carol` → `actor_id=teammate-carol`).
+- **Tailscale:** community app **v1.4.10** installed (`host_network: true`, hostname `claude-mem-nas`). **Awaiting Mark's interactive login click.** SECURITY NOTE: host networking exposes ALL NAS host ports to the tailnet — tighten with Tailscale ACLs or switch to Tailscale Serve (`:37877` only) as a follow-up.
+- **TODO:** Mark clicks login URL → verify `:37877` over the tailnet → mint a read-only teammate key + document day-1 onboarding.
