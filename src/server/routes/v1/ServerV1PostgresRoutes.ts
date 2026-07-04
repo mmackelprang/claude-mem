@@ -35,6 +35,8 @@ import type { ServerSessionGenerationPolicy } from '../../runtime/SessionGenerat
 import { IngestEventsService, type EnqueueOutcome } from '../../services/IngestEventsService.js';
 import { EndSessionService } from '../../services/EndSessionService.js';
 import { normalizePlatformSource, normalizePlatformSourceOrNull } from '../../../shared/platform-source.js';
+import { resolveDefaultVisibility } from '../../../shared/visibility.js';
+import { humanizeActor } from '../../../shared/actor-display.js';
 
 const SOURCE_ADAPTER_DEFAULT = 'api';
 
@@ -922,6 +924,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         kind: z.string().min(1).optional(),
         content: z.string().min(1),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        // Phase 2 — the Phase-3 SQLite→Postgres importer stamps 'private' per row
+        // here (it cannot rely on the one-time backfill or the 'team' column
+        // default). An ordinary manual write omits it and gets the config default.
+        visibility: z.enum(['private', 'team', 'org']).optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -938,6 +944,8 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             metadata: body.metadata ?? {},
             actorId: await this.resolveActorId(req),
             apiKeyId: req.authContext?.apiKeyId ?? null,
+            visibility: body.visibility
+              ?? resolveDefaultVisibility({ envValue: process.env.CLAUDE_MEM_DEFAULT_VISIBILITY ?? null }),
           });
           await this.auditWrite(req, 'memory.write', observation.id, observation.projectId);
           res.status(201).json({ memory: serializeObservation(observation) });
@@ -973,6 +981,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             limit: body.limit ?? 20,
             platformSource,
             actorId: body.actorId ?? null,
+            viewerActorId: await this.resolveActorId(req),
           });
           await this.auditRead(req, 'observation.read', null, body.projectId, {
             mode: 'search',
@@ -1018,6 +1027,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             limit: body.limit ?? 10,
             platformSource,
             actorId: body.actorId ?? null,
+            viewerActorId: await this.resolveActorId(req),
           });
           const context = results
             .map(observation => observation.content)
@@ -1059,10 +1069,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           throw new Error('API key is scoped to a different project');
         }
       };
+      // Phase 2 — resolve the reader's actor once so every MCP recall method
+      // returns team/org rows plus the reader's OWN private rows (never another
+      // actor's private). Same predicate as POST /v1/search.
+      const viewerActorId = await this.resolveActorId(req);
       const backend: RecallBackend = {
         search: async ({ projectId, query, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit });
+          const rows = await repo.search({ projectId, teamId, query, limit, viewerActorId });
           // Audit the read, same as POST /v1/search — the MCP path is no exception.
           await this.auditRead(req, 'observation.read', null, projectId, {
             mode: 'search', via: 'mcp', query, limit,
@@ -1072,7 +1086,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         },
         context: async ({ projectId, query, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit });
+          const rows = await repo.search({ projectId, teamId, query, limit, viewerActorId });
           await this.auditRead(req, 'observation.read', null, projectId, {
             mode: 'context', via: 'mcp', query, limit,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
@@ -1081,7 +1095,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         },
         recent: async ({ projectId, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.listByProject({ projectId, teamId, limit });
+          const rows = await repo.listByProject({ projectId, teamId, limit, viewerActorId });
           await this.auditRead(req, 'observation.read', null, projectId, {
             mode: 'recent', via: 'mcp', limit,
             resultCount: rows.length, observationIds: rows.map(o => o.id),
@@ -1134,6 +1148,30 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         this.handleDbError(error, res, 'observation.delete');
       }
     }));
+
+    // PATCH /v1/memories/:id/visibility — viewer visibility toggle. Team<->Private
+    // only; 'org' is inert and never settable from a user-facing control
+    // (Designer handoff §5). Redact reuses the shipped DELETE /v1/memories/:id.
+    app.patch('/v1/memories/:id/visibility', writeAuth, this.handleCreate(
+      z.object({ visibility: z.enum(['team', 'private']) }),
+      async (req, res, body) => {
+        const teamId = this.requireTeamId(req, res);
+        if (!teamId) return;
+        const id = String(req.params.id);
+        const projectScope = req.authContext?.projectId ?? null;
+        try {
+          const repo = new PostgresObservationRepository(this.options.pool);
+          const updated = await repo.updateVisibilityForScope({
+            id, teamId, projectId: projectScope, visibility: body.visibility,
+          });
+          if (!updated) { res.status(404).json({ error: 'not_found' }); return; }
+          await this.auditWrite(req, 'memory.visibility', id, updated.projectId);
+          res.status(200).json({ memory: serializeObservation(updated) });
+        } catch (error) {
+          this.handleDbError(error, res, 'memory.visibility');
+        }
+      },
+    ));
 
     // DELETE /v1/projects/:projectId/memory — forget EVERYTHING captured for a
     // project (observations, raw events, sessions, jobs). Keeps the project shell.
@@ -1864,6 +1902,7 @@ function resolveAuditResourceType(action: string): string {
     'session.write': 'server_session',
     'session.end': 'server_session',
     'memory.write': 'observation',
+    'memory.visibility': 'observation',
     'observation.read': 'observation',
     'observation.search': 'observation',
     'observation.context': 'observation',
@@ -1979,6 +2018,7 @@ function serializeObservation(observation: {
   content: string;
   metadata: Record<string, unknown>;
   actorId: string | null;
+  visibility: import('../../../shared/visibility.js').VisibilityLevel;
   createdAtEpoch: number;
   updatedAtEpoch: number;
 }): Record<string, unknown> {
@@ -1991,6 +2031,8 @@ function serializeObservation(observation: {
     content: observation.content,
     metadata: observation.metadata,
     actorId: observation.actorId,
+    author: humanizeActor(observation.actorId),
+    visibility: observation.visibility,
     createdAtEpoch: observation.createdAtEpoch,
     updatedAtEpoch: observation.updatedAtEpoch,
   };
