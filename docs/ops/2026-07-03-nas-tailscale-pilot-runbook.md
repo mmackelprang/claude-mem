@@ -58,3 +58,11 @@ TrueNAS SCALE gives two clean, host-safe options — pick after detecting SCALE 
 - **Steps 6–7 DONE.** E2E validated (5/5); read-only teammate key minted (`/mnt/datapool/apps/claude-mem-pilot/teammate-readonly.key`); day-1 onboarding written → `docs/ops/2026-07-04-teammate-onboarding.md`.
 - **Pilot is functionally complete: a remote teammate can consume/contribute over Tailscale.**
 - **Open follow-ups:** (1) Tailscale ACLs / Serve to stop host-networking exposing all NAS ports; (2) provider key on `claude-mem-worker` to enable generation; (3) optional node rename to `claude-mem-nas`.
+
+## Phase 2 + Phase 4 live on pilot (2026-07-04)
+- **Phase 2 (visibility) — PR #7 deployed:** pilot schema v2→v3 in-place; pre-existing rows backfilled to `visibility=private`; go-forward `team`. Verified (2 rows → private).
+- **Phase 4 (Chroma vector recall) — PR #8 deployed:** added a `chroma` service (chromadb/chroma:latest, token auth, host-path volume) to the app compose; `CLAUDE_MEM_CHROMA_ENABLED=true` + remote mode + `CHROMA_API_KEY` generated on-NAS. Server wired Chroma-first with FTS fallback.
+  - Validated: chroma v2 heartbeat 200 from the server container; `/v1/search` 200 (empty index → empty results, since generation is off and pre-existing rows aren't indexed); **degrade path** — chroma stopped → search stays 200 via FTS, healthz 200, server healthy. First query cold-starts (~<8s: `uvx chroma-mcp` + embedding-model warmup), fast after.
+  - Fixed a bogus chroma healthcheck (image has no `python`) → disabled it (server depends on chroma via `service_started`, so functionally unaffected).
+- **Pilot stack:** postgres + valkey + chroma + claude-mem-server + claude-mem-worker, all up.
+- **For real semantic recall:** the Chroma index is empty until generation runs (needs `ANTHROPIC_API_KEY` on the worker → server-generated observations index to Chroma via the Phase-4 write side). Existing Postgres rows would need a one-time Chroma backfill (not built).
