@@ -12,6 +12,7 @@ import {
   toJsonObject
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
+import type { VisibilityLevel } from '../../shared/visibility.js';
 
 export type ObservationSourceType = 'agent_event' | 'session_summary' | 'observation_reindex' | 'manual';
 
@@ -28,6 +29,7 @@ export interface PostgresObservation {
   createdByJobId: string | null;
   actorId: string | null;
   apiKeyId: string | null;
+  visibility: VisibilityLevel;
   createdAtEpoch: number;
   updatedAtEpoch: number;
 }
@@ -56,6 +58,7 @@ interface ObservationRow {
   created_by_job_id: string | null;
   actor_id: string | null;
   api_key_id: string | null;
+  visibility: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -87,6 +90,7 @@ export class PostgresObservationRepository {
     createdByJobId?: string | null;
     actorId?: string | null;
     apiKeyId?: string | null;
+    visibility?: VisibilityLevel | null;
   }): Promise<PostgresObservation> {
     await assertProjectOwnership(this.client, input.projectId, input.teamId);
     if (input.serverSessionId) {
@@ -101,9 +105,10 @@ export class PostgresObservationRepository {
       `
         INSERT INTO observations (
           id, project_id, team_id, server_session_id, kind, content,
-          generation_key, metadata, embedding, created_by_job_id, actor_id, api_key_id
+          generation_key, metadata, embedding, created_by_job_id, actor_id, api_key_id,
+          visibility
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
         ON CONFLICT (team_id, project_id, generation_key) WHERE generation_key IS NOT NULL DO UPDATE SET
           updated_at = observations.updated_at
         RETURNING *
@@ -120,7 +125,8 @@ export class PostgresObservationRepository {
         input.embedding == null ? null : JSON.stringify(input.embedding),
         input.createdByJobId ?? null,
         input.actorId ?? null,
-        input.apiKeyId ?? null
+        input.apiKeyId ?? null,
+        input.visibility ?? 'team'
       ]
     );
     return mapObservationRow(row!);
@@ -144,6 +150,7 @@ export class PostgresObservationRepository {
     teamId: string;
     serverSessionId?: string | null;
     limit?: number;
+    viewerActorId?: string | null;
   }): Promise<PostgresObservation[]> {
     const result = await this.client.query<ObservationRow>(
       `
@@ -151,10 +158,14 @@ export class PostgresObservationRepository {
         WHERE project_id = $1
           AND team_id = $2
           AND ($3::text IS NULL OR server_session_id = $3)
+          AND (
+            visibility IN ('team','org')
+            OR ($5::text IS NOT NULL AND visibility = 'private' AND actor_id = $5)
+          )
         ORDER BY created_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.serverSessionId ?? null, input.limit ?? 100]
+      [input.projectId, input.teamId, input.serverSessionId ?? null, input.limit ?? 100, input.viewerActorId ?? null]
     );
     return result.rows.map(mapObservationRow);
   }
@@ -166,6 +177,7 @@ export class PostgresObservationRepository {
     limit?: number;
     platformSource?: string | null;
     actorId?: string | null;
+    viewerActorId?: string | null;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
     const result = await this.client.query<ObservationRow>(
@@ -179,6 +191,12 @@ export class PostgresObservationRepository {
           AND observations.team_id = $2
           AND observations.content_search @@ websearch_to_tsquery('english', $3)
           AND ($6::text IS NULL OR observations.actor_id = $6)
+          AND (
+            observations.visibility IN ('team','org')
+            OR ($7::text IS NOT NULL
+                AND observations.visibility = 'private'
+                AND observations.actor_id = $7)
+          )
           AND (
             $5::text IS NULL
             OR server_sessions.platform_source = $5
@@ -200,9 +218,34 @@ export class PostgresObservationRepository {
         ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC, observations.updated_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource, input.actorId ?? null]
+      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource, input.actorId ?? null, input.viewerActorId ?? null]
     );
     return result.rows.map(mapObservationRow);
+  }
+
+  /**
+   * Phase 2 — viewer visibility toggle (Team<->Private only; 'org' is inert and
+   * never settable from a user-facing control). Team-scoped; project-scoped when
+   * the key is project-bound. Returns null (404-not-403, matching the deletion
+   * stance) when nothing matches the scope.
+   */
+  async updateVisibilityForScope(input: {
+    id: string;
+    teamId: string;
+    projectId: string | null;
+    visibility: 'team' | 'private';
+  }): Promise<PostgresObservation | null> {
+    const row = await queryOne<ObservationRow>(
+      this.client,
+      `
+        UPDATE observations SET visibility = $4, updated_at = now()
+        WHERE id = $1 AND team_id = $2
+          AND ($3::text IS NULL OR project_id = $3)
+        RETURNING *
+      `,
+      [input.id, input.teamId, input.projectId, input.visibility]
+    );
+    return row ? mapObservationRow(row) : null;
   }
 }
 
@@ -413,6 +456,7 @@ function mapObservationRow(row: ObservationRow): PostgresObservation {
     createdByJobId: row.created_by_job_id,
     actorId: row.actor_id,
     apiKeyId: row.api_key_id,
+    visibility: (row.visibility as VisibilityLevel) ?? 'team',
     createdAtEpoch: toEpoch(row.created_at),
     updatedAtEpoch: toEpoch(row.updated_at)
   };
