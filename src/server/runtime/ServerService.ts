@@ -473,10 +473,17 @@ export function assertServerRuntimeForCli(
 // backward-compatible `system:server-cli` default.
 export const DEFAULT_SERVER_CLI_ACTOR_ID = 'system:server-cli';
 
+// `actor` is typed `unknown` deliberately. parseFlagArgs runs node's parseArgs
+// with `strict: false`, under which a trailing bare `--actor` (no value) yields
+// the BOOLEAN `true` even though the flag is declared `type: 'string'` — and
+// parseFlagArgs' `as CliFlagValues` cast is unchecked, so TypeScript cannot
+// catch it. The pre-merge hand-rolled parser degraded to the default here; a
+// naive `options.actor?.trim()` would instead throw TypeError. Guard on the
+// runtime type so a malformed invocation still falls back. See ADR 0002 §4.5.
 export function resolveServerApiKeyCliActorId(
-  options: { actor?: string },
+  options: { actor?: unknown },
 ): string {
-  const actor = options.actor?.trim();
+  const actor = typeof options.actor === 'string' ? options.actor.trim() : undefined;
   return actor ? actor : DEFAULT_SERVER_CLI_ACTOR_ID;
 }
 
@@ -769,7 +776,10 @@ interface CliFlagValues {
   actor?: string;
 }
 
-function parseFlagArgs(argv: string[]): CliFlagValues {
+// Exported for tests: the `actor` allowlist entry below is load-bearing and
+// invisible to a parent-diff at merge time (see ADR 0002 §4.5), so the suite
+// pins it by driving the real parser rather than hand-built literals.
+export function parseFlagArgs(argv: string[]): CliFlagValues {
   return parseArgs({
     args: argv,
     options: {

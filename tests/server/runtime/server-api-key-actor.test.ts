@@ -16,6 +16,7 @@ import pg from 'pg';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import {
   DEFAULT_SERVER_CLI_ACTOR_ID,
+  parseFlagArgs,
   resolveServerApiKeyCliActorId,
 } from '../../../src/server/runtime/ServerService.js';
 import {
@@ -36,15 +37,53 @@ describe('resolveServerApiKeyCliActorId', () => {
   });
 
   it('falls back to the default for an empty/whitespace --actor', () => {
-    // parseFlagArgs yields '' when `--actor` is passed as the trailing flag
-    // with no value; treat that as "not provided" rather than storing an
-    // empty author id.
+    // Treat a valueless --actor as "not provided" rather than storing an empty
+    // author id.
     expect(resolveServerApiKeyCliActorId({ actor: '' })).toBe(DEFAULT_SERVER_CLI_ACTOR_ID);
     expect(resolveServerApiKeyCliActorId({ actor: '   ' })).toBe(DEFAULT_SERVER_CLI_ACTOR_ID);
   });
 
   it('trims surrounding whitespace from the provided actor', () => {
     expect(resolveServerApiKeyCliActorId({ actor: '  bob  ' })).toBe('bob');
+  });
+
+  it('falls back to the default when parseArgs yields a boolean actor', () => {
+    // node's parseArgs under `strict: false` yields the BOOLEAN `true` for a
+    // trailing bare `--actor`, even though the flag is declared type:'string'.
+    // The resolver must not call .trim() on that. Regression guard: the
+    // pre-merge hand-rolled parser degraded gracefully here and the v13.11.0
+    // parseArgs rewrite would otherwise throw TypeError. See ADR 0002 §4.5.
+    expect(resolveServerApiKeyCliActorId({ actor: true })).toBe(DEFAULT_SERVER_CLI_ACTOR_ID);
+  });
+});
+
+// These drive the REAL parser rather than hand-built literals. The `actor`
+// entry in parseFlagArgs' options allowlist is load-bearing: upstream v13.11.0
+// replaced a hand-rolled generic parser (which captured any `--foo bar`) with
+// node's parseArgs + a declared allowlist. Our fork never touched that region,
+// so git reported NO conflict — dropping `actor` from the allowlist would
+// silently degrade `--actor` with nothing to catch it (ADR 0002 §4.5, R5).
+describe('parseFlagArgs — WS2 author seam allowlist', () => {
+  it('captures `--actor <id>` as a string value, not a positional', () => {
+    expect(parseFlagArgs(['create', '--actor', 'mark']).actor).toBe('mark');
+    expect(parseFlagArgs(['create', '--actor=mark']).actor).toBe('mark');
+  });
+
+  it('end-to-end: `--actor mark` resolves to the mark author id', () => {
+    expect(resolveServerApiKeyCliActorId(parseFlagArgs(['create', '--actor', 'mark']))).toBe('mark');
+  });
+
+  it('end-to-end: a trailing bare `--actor` degrades to the default, never throws', () => {
+    expect(() => resolveServerApiKeyCliActorId(parseFlagArgs(['create', '--actor']))).not.toThrow();
+    expect(resolveServerApiKeyCliActorId(parseFlagArgs(['create', '--actor']))).toBe(
+      DEFAULT_SERVER_CLI_ACTOR_ID,
+    );
+  });
+
+  it('end-to-end: no --actor resolves to the backward-compatible default', () => {
+    expect(resolveServerApiKeyCliActorId(parseFlagArgs(['create']))).toBe(
+      DEFAULT_SERVER_CLI_ACTOR_ID,
+    );
   });
 });
 
