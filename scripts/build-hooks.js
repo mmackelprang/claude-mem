@@ -101,7 +101,7 @@ function assertPluginRelativeRequiresResolve(scriptsDir) {
  * #1215, #1533). See src/build/hook-shell-template.ts and CLAUDE.md →
  * "Spawn-Contract Resolution".
  */
-function shellTemplateManifest(buildShellCommand) {
+function shellTemplateManifest(buildShellCommand, buildCodexWindowsCommand) {
   const ccTrailing = (...tail) => [
     'node', '"$_P/scripts/bun-runner.js"', '"$_P/scripts/worker-service.cjs"', ...tail,
   ];
@@ -124,6 +124,10 @@ function shellTemplateManifest(buildShellCommand) {
     ],
     notFoundMessage: 'claude-mem: plugin scripts not found',
   });
+  const codexHookPair = (tail, options = {}) => ({
+    command: options.startupVersionCheck ? codexStartupHook() : codexHook(tail),
+    commandWindows: buildCodexWindowsCommand(tail, options),
+  });
 
   return {
     'plugin/hooks/hooks.json': {
@@ -145,11 +149,11 @@ function shellTemplateManifest(buildShellCommand) {
     'plugin/hooks/codex-hooks.json': {
       kind: 'hooks',
       commands: {
-        'SessionStart.0.0': codexStartupHook(),
-        'UserPromptSubmit.0.0': codexHook(['hook', 'codex', 'session-init']),
-        'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
-        'PostToolUse.0.0': codexHook(['hook', 'codex', 'observation']),
-        'Stop.0.0': codexHook(['hook', 'codex', 'summarize']),
+        'SessionStart.0.0': codexHookPair(['hook', 'codex', 'context'], { startupVersionCheck: true }),
+        'UserPromptSubmit.0.0': codexHookPair(['hook', 'codex', 'session-init']),
+        'PreToolUse.0.0': codexHookPair(['hook', 'codex', 'file-context']),
+        'PostToolUse.0.0': codexHookPair(['hook', 'codex', 'observation']),
+        'Stop.0.0': codexHookPair(['hook', 'codex', 'summarize']),
       },
     },
     'plugin/.mcp.json': {
@@ -169,9 +173,9 @@ function shellTemplateManifest(buildShellCommand) {
   };
 }
 
-function hookCommandByPath(parsed, dottedPath) {
+function hookEntryByPath(parsed, dottedPath) {
   const [event, groupIdx, hookIdx] = dottedPath.split('.');
-  return parsed.hooks?.[event]?.[Number(groupIdx)]?.hooks?.[Number(hookIdx)]?.command ?? null;
+  return parsed.hooks?.[event]?.[Number(groupIdx)]?.hooks?.[Number(hookIdx)] ?? null;
 }
 
 async function verifyShellTemplateCanonical() {
@@ -190,9 +194,9 @@ async function verifyShellTemplateCanonical() {
   });
   const moduleSource = bundled.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(moduleSource).toString('base64');
-  const { buildShellCommand } = await import(dataUrl);
+  const { buildShellCommand, buildCodexWindowsCommand } = await import(dataUrl);
 
-  const manifest = shellTemplateManifest(buildShellCommand);
+  const manifest = shellTemplateManifest(buildShellCommand, buildCodexWindowsCommand);
 
   for (const [filePath, spec] of Object.entries(manifest)) {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
@@ -206,12 +210,23 @@ async function verifyShellTemplateCanonical() {
       }
     } else {
       for (const [dottedPath, expected] of Object.entries(spec.commands)) {
-        const actual = hookCommandByPath(parsed, dottedPath);
-        if (actual !== expected) {
+        const entry = hookEntryByPath(parsed, dottedPath);
+        const expectedCommand = typeof expected === 'string' ? expected : expected.command;
+        const actual = entry?.command ?? null;
+        if (actual !== expectedCommand) {
           throw new Error(
             `Hand-edited shell string detected in ${filePath} (${dottedPath}). It no longer matches src/build/hook-shell-template.ts. ` +
             `Regenerate via the canonical generator instead of hand-editing the command.`
           );
+        }
+        if (typeof expected !== 'string') {
+          const actualWindows = entry?.commandWindows ?? null;
+          if (actualWindows !== expected.commandWindows) {
+            throw new Error(
+              `Hand-edited Windows shell string detected in ${filePath} (${dottedPath}). It no longer matches src/build/hook-shell-template.ts. ` +
+              `Regenerate via the canonical generator instead of hand-editing commandWindows.`
+            );
+          }
         }
       }
     }
@@ -283,7 +298,6 @@ async function buildHooks() {
         'tree-sitter-kotlin': '^0.3.8',
         'tree-sitter-swift': '^0.7.1',
         'tree-sitter-php': '^0.24.2',
-        'tree-sitter-elixir': '^0.3.5',
         '@tree-sitter-grammars/tree-sitter-lua': '^0.4.1',
         'tree-sitter-scala': '^0.24.0',
         'tree-sitter-bash': '^0.25.1',
@@ -474,7 +488,6 @@ async function buildHooks() {
         'tree-sitter-kotlin',
         'tree-sitter-swift',
         'tree-sitter-php',
-        'tree-sitter-elixir',
         '@tree-sitter-grammars/tree-sitter-lua',
         'tree-sitter-scala',
         'tree-sitter-bash',
@@ -702,6 +715,11 @@ async function buildHooks() {
       'plugin/hooks/hooks.json',
       'plugin/hooks/codex-hooks.json',
       'plugin/scripts/bun-runner.js',
+      // Emitted as .cjs (not .js) so Node can require() it despite
+      // plugin/package.json's "type":"module". observations/files.js is
+      // deliberately NOT emitted — parseFileList is a static import inlined
+      // into the worker bundle. See ADR 0002 §4.2.
+      'plugin/sqlite/SessionStore.cjs',
       'plugin/.claude-plugin/plugin.json',
       'plugin/.codex-plugin/plugin.json',
       'plugin/.mcp.json',

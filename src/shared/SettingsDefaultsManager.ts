@@ -1,8 +1,9 @@
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { homedir } from 'os';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir, hostname } from 'os';
 import { HOOK_TIMEOUTS, getTimeout } from './hook-constants.js';
+import { parseJsonWithBom, writeJsonFileAtomic } from './atomic-json.js';
 
 export interface SettingsDefaults {
   CLAUDE_MEM_MODEL: string;
@@ -63,6 +64,13 @@ export interface SettingsDefaults {
   CLAUDE_MEM_CHROMA_TENANT: string;
   CLAUDE_MEM_CHROMA_DATABASE: string;
   CLAUDE_MEM_CHROMA_PREWARM_TIMEOUT_MS: string;
+  // Worker-native cloud sync (cmem.ai Pro). Active ⇔ TOKEN and USER_ID are
+  // both non-empty — there is no separate enabled flag.
+  CLAUDE_MEM_CLOUD_SYNC_TOKEN: string;
+  CLAUDE_MEM_CLOUD_SYNC_USER_ID: string;
+  CLAUDE_MEM_CLOUD_SYNC_URL: string;
+  CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: string;
+  CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: string;
   CLAUDE_MEM_TELEGRAM_ENABLED: string;
   CLAUDE_MEM_TELEGRAM_BOT_TOKEN: string;
   CLAUDE_MEM_TELEGRAM_CHAT_ID: string;
@@ -151,6 +159,12 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_CHROMA_TENANT: 'default_tenant',
     CLAUDE_MEM_CHROMA_DATABASE: 'default_database',
     CLAUDE_MEM_CHROMA_PREWARM_TIMEOUT_MS: '120000',
+    // Worker-native cloud sync (cmem.ai Pro): credentials come from cmem.ai → Connect.
+    CLAUDE_MEM_CLOUD_SYNC_TOKEN: '',
+    CLAUDE_MEM_CLOUD_SYNC_USER_ID: '',
+    CLAUDE_MEM_CLOUD_SYNC_URL: 'https://cmem.ai/api/pro/sync',
+    CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: '',      // Resolved at first CloudSync start (legacy state file → adopt; else randomUUID), then persisted back here
+    CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: hostname(),  // Human-readable label for the cmem.ai Devices panel
     CLAUDE_MEM_TELEGRAM_ENABLED: 'true',
     CLAUDE_MEM_TELEGRAM_BOT_TOKEN: '',
     CLAUDE_MEM_TELEGRAM_CHAT_ID: '',
@@ -189,11 +203,6 @@ export class SettingsDefaultsManager {
     return parseInt(value, 10);
   }
 
-  static getBool(key: keyof SettingsDefaults): boolean {
-    const value: unknown = this.get(key);
-    return value === 'true' || value === true;
-  }
-
   private static applyEnvOverrides(settings: SettingsDefaults): SettingsDefaults {
     const result = { ...settings };
     for (const key of Object.keys(this.DEFAULTS) as Array<keyof SettingsDefaults>) {
@@ -209,11 +218,7 @@ export class SettingsDefaultsManager {
       if (!existsSync(settingsPath)) {
         const defaults = this.getAllDefaults();
         try {
-          const dir = dirname(settingsPath);
-          if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true });
-          }
-          writeFileSync(settingsPath, JSON.stringify(defaults, null, 2), 'utf-8');
+          writeJsonFileAtomic(settingsPath, defaults);
           // stderr, never stdout: this fires on the first boot in a fresh data
           // dir, and CLI commands like `start` promise machine-readable JSON
           // on stdout to the hook framework.
@@ -225,17 +230,14 @@ export class SettingsDefaultsManager {
       }
 
       const settingsData = readFileSync(settingsPath, 'utf-8');
-      // Strip UTF-8 BOM if present — Windows tools (editors, formatters, CLI
-      // hooks) may prepend U+FEFF which Bun's JSON.parse rejects silently,
-      // causing a full fallback to defaults and breaking server-beta routing.
-      const settings = JSON.parse(settingsData.replace(/^\uFEFF/, ''));
+      const settings = parseJsonWithBom<Record<string, any>>(settingsData);
 
       let flatSettings = settings;
       if (settings.env && typeof settings.env === 'object') {
         flatSettings = settings.env;
 
         try {
-          writeFileSync(settingsPath, JSON.stringify(flatSettings, null, 2), 'utf-8');
+          writeJsonFileAtomic(settingsPath, flatSettings);
           // stderr, never stdout — same JSON-on-stdout contract as above.
           console.warn('[SETTINGS] Migrated settings file from nested to flat schema:', settingsPath);
         } catch (error: unknown) {

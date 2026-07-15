@@ -16,6 +16,7 @@ import pg from 'pg';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import {
   DEFAULT_SERVER_CLI_ACTOR_ID,
+  parseFlagArgs,
   resolveServerApiKeyCliActorId,
 } from '../../../src/server/runtime/ServerService.js';
 import {
@@ -36,15 +37,88 @@ describe('resolveServerApiKeyCliActorId', () => {
   });
 
   it('falls back to the default for an empty/whitespace --actor', () => {
-    // parseFlagArgs yields '' when `--actor` is passed as the trailing flag
-    // with no value; treat that as "not provided" rather than storing an
-    // empty author id.
+    // Treat a valueless --actor as "not provided" rather than storing an empty
+    // author id.
     expect(resolveServerApiKeyCliActorId({ actor: '' })).toBe(DEFAULT_SERVER_CLI_ACTOR_ID);
     expect(resolveServerApiKeyCliActorId({ actor: '   ' })).toBe(DEFAULT_SERVER_CLI_ACTOR_ID);
   });
 
   it('trims surrounding whitespace from the provided actor', () => {
     expect(resolveServerApiKeyCliActorId({ actor: '  bob  ' })).toBe('bob');
+  });
+
+  it('falls back to the default when parseArgs yields a boolean actor', () => {
+    // node's parseArgs under `strict: false` yields the BOOLEAN `true` for a
+    // trailing bare `--actor`, even though the flag is declared type:'string'.
+    // The resolver must not call .trim() on that. Regression guard: the
+    // pre-merge hand-rolled parser degraded gracefully here and the v13.11.0
+    // parseArgs rewrite would otherwise throw TypeError. See ADR 0002 §4.5.
+    expect(resolveServerApiKeyCliActorId({ actor: true })).toBe(DEFAULT_SERVER_CLI_ACTOR_ID);
+  });
+});
+
+// These drive the REAL parser rather than hand-built literals. The `actor`
+// entry in parseFlagArgs' options allowlist is load-bearing: upstream v13.11.0
+// replaced a hand-rolled generic parser (which captured any `--foo bar`) with
+// node's parseArgs + a declared allowlist. Our fork never touched that region,
+// so git reported NO conflict — dropping `actor` from the allowlist would
+// silently degrade `--actor` with nothing to catch it (ADR 0002 §4.5, R5).
+describe('parseFlagArgs — WS2 author seam allowlist', () => {
+  it('captures `--actor <id>` as a string value, not a positional', () => {
+    expect(parseFlagArgs(['create', '--actor', 'mark']).actor).toBe('mark');
+    expect(parseFlagArgs(['create', '--actor=mark']).actor).toBe('mark');
+  });
+
+  it('end-to-end: `--actor mark` resolves to the mark author id', () => {
+    expect(resolveServerApiKeyCliActorId(parseFlagArgs(['create', '--actor', 'mark']))).toBe('mark');
+  });
+
+  it('end-to-end: a trailing bare `--actor` degrades to the default, never throws', () => {
+    expect(() => resolveServerApiKeyCliActorId(parseFlagArgs(['create', '--actor']))).not.toThrow();
+    expect(resolveServerApiKeyCliActorId(parseFlagArgs(['create', '--actor']))).toBe(
+      DEFAULT_SERVER_CLI_ACTOR_ID,
+    );
+  });
+
+  it('end-to-end: no --actor resolves to the backward-compatible default', () => {
+    expect(resolveServerApiKeyCliActorId(parseFlagArgs(['create']))).toBe(
+      DEFAULT_SERVER_CLI_ACTOR_ID,
+    );
+  });
+});
+
+// The boolean-coercion hazard is not specific to --actor: under strict:false
+// EVERY flag declared type:'string' yields boolean `true` when passed bare.
+// `?? default` does not rescue it (true is not nullish), so before sanitizing:
+//   `(options.scope ?? 'memories:read').split(',')` -> TypeError (crash)
+//   `options.name ?? 'server-api-key'`              -> persists the string "true"
+// parseFlagArgs drops valueless string flags so every read site's ?? applies.
+describe('parseFlagArgs — valueless string flags degrade to "not provided"', () => {
+  for (const flag of ['scope', 'scopes', 'team', 'project', 'name', 'limit', 'offset', 'status', 'actor'] as const) {
+    it(`drops a valueless --${flag} rather than yielding boolean true`, () => {
+      const values = parseFlagArgs(['create', `--${flag}`]) as Record<string, unknown>;
+      expect(values[flag]).toBeUndefined();
+    });
+  }
+
+  it('keeps real values for string flags', () => {
+    const v = parseFlagArgs(['create', '--scope', 'memories:read', '--name', 'k1']);
+    expect(v.scope).toBe('memories:read');
+    expect(v.name).toBe('k1');
+  });
+
+  it('does NOT strip --active, which is genuinely boolean', () => {
+    expect(parseFlagArgs(['list', '--active']).active).toBe(true);
+  });
+
+  it('a valueless --scope no longer crashes the scopes split', () => {
+    const options = parseFlagArgs(['create', '--scope']);
+    expect(() => (options.scope ?? options.scopes ?? 'memories:read').split(',')).not.toThrow();
+    expect((options.scope ?? options.scopes ?? 'memories:read').split(',')).toEqual(['memories:read']);
+  });
+
+  it('a valueless --name falls back instead of persisting the literal "true"', () => {
+    expect(parseFlagArgs(['create', '--name']).name ?? 'server-api-key').toBe('server-api-key');
   });
 });
 

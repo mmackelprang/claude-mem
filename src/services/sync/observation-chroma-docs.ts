@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Single source of truth for the Chroma document shape of a server/team-mode
-// (UUID-keyed) observation. Consumed by BOTH the cmem-sdk write path
-// (src/sdk/index.ts indexObservationsToChroma) and the server-beta BullMQ
-// generation worker (src/server/generation/ProviderObservationGenerator.ts),
-// so index-time metadata can never drift from what the read-side `where`
-// filter (ChromaObservationRecall.buildWhere) expects.
+// (UUID-keyed) observation. Consumed by the server-beta BullMQ generation
+// worker (src/server/generation/ProviderObservationGenerator.ts), so
+// index-time metadata can never drift from what the read-side `where` filter
+// (ChromaObservationRecall.buildWhere) expects.
+// (The former cmem-sdk write path, src/sdk/index.ts indexObservationsToChroma,
+// was deleted upstream in v13.11.0. See ADR 0002 §4.4.)
 //
 // OVERRIDE-C: import the ChromaDocument shape TYPE-ONLY so this module never
 // pulls ChromaSync's runtime graph (bun:sqlite via lazy require) into the SDK

@@ -7,6 +7,7 @@ Naming: `YYYY-MM-DD-<topic>.md`. Status is one of `Proposed`, `Accepted`, `Super
 | ADR | Date | Status | Topic |
 |-----|------|--------|-------|
 | [0001](./2026-07-02-multi-user-cross-team-memory.md) | 2026-07-02 | Proposed | Multi-user / cross-team memory & history — extend the Hosted Server (Beta) runtime; close the author, auth, privacy, and migration seams. |
+| [0002](./2026-07-14-upstream-v13.11.0-fork-merge.md) | 2026-07-14 | Accepted | Merging upstream v13.11.0 into the personal fork — single merge (not rebase), fork-only topology, per-file conflict resolution rules, and WS2 non-regression gates. |
 
 ## Related long-form architecture docs
 

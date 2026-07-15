@@ -11,10 +11,10 @@ import {
   SearchOptions,
   SearchFilters,
   DateRange,
-  ObservationRow,
-  UserPromptRow
+  ObservationRow
 } from './types.js';
 import { DEFAULT_PLATFORM_SOURCE, normalizePlatformSource } from '../../shared/platform-source.js';
+import { applySqliteConnectionPragmas } from './connection.js';
 
 export class SessionSearch {
   private db: Database;
@@ -27,8 +27,9 @@ export class SessionSearch {
     } else {
       ensureDir(DATA_DIR);
       this.db = new Database(dbPathOrDb);
-      this.db.run('PRAGMA journal_mode = WAL');
     }
+
+    applySqliteConnectionPragmas(this.db);
 
     this._fts5Available = this.isFts5Available();
 
@@ -66,7 +67,8 @@ export class SessionSearch {
       this.db.run('CREATE VIRTUAL TABLE _fts5_probe USING fts5(test_column)');
       this.db.run('DROP TABLE _fts5_probe');
       return true;
-    } catch {
+    } catch (error) {
+      logger.debug('DB', 'FTS5 probe failed — FTS5 unavailable on this platform', undefined, error instanceof Error ? error : new Error(String(error)));
       return false;
     }
   }
@@ -605,23 +607,6 @@ export class SessionSearch {
 
     params.push(limit, offset);
     return this.db.prepare(sql).all(...params) as UserPromptSearchResult[];
-  }
-
-  getUserPromptsBySession(contentSessionId: string): UserPromptRow[] {
-    const stmt = this.db.prepare(`
-      SELECT
-        id,
-        content_session_id,
-        prompt_number,
-        prompt_text,
-        created_at,
-        created_at_epoch
-      FROM user_prompts
-      WHERE content_session_id = ?
-      ORDER BY prompt_number ASC
-    `);
-
-    return stmt.all(contentSessionId) as UserPromptRow[];
   }
 
   close(): void {
