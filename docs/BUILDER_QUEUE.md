@@ -4,7 +4,11 @@
 > Builder: branch from `main`, implement per the linked plan, run all gates in the plan's § Verification,
 > open a PR, and (per the auto-merge policy) merge on green. Do not re-plan — surface drift instead.
 >
-> **Last updated:** 2026-07-15 (Builder — ADR 0002 follow-ups #5–#10 added to Backlog)
+> **Last updated:** 2026-07-15 (Builder — ADR 0002 follow-ups #5–#8, #10 added to Backlog; #9 shipped as PR #11)
+>
+> **Numbering:** Backlog/Queue `#` values are stable IDs — never reused, gaps are expected once a row
+> ships or is dropped. **Recently shipped rows are deliberately unnumbered:** they are not queue rows, so
+> they must not consume a Backlog ID (doing so caused the #5 collision between PRs #10 and #11).
 
 ## Legend
 
@@ -27,7 +31,7 @@
 | 6 | **Decide whether to fix the 4 upstream test defects inherited from v13.11.0** | PR #9 / ADR 0002 §9 — deferred at merge, logged | 3× `tests/services/integrations/spawn-contract-windows.test.ts` (Windows #2695) assert `toBe('cmd.exe')` while the source returns `process.env.ComSpec ?? 'cmd.exe'` (`src/shared/spawn.ts:74`). On real Windows `ComSpec` is `C:\WINDOWS\system32\cmd.exe`, so the assertion **can only pass where `ComSpec` is unset** — i.e. upstream's Linux CI faking `platform:'win32'`. Plus 1× `HealthMonitor > isPortInUse > should honor configured worker host` (`tests/infrastructure/health-monitor.test.ts`, port-probe/env-dependent). Test-only; runtime behaviour (absolute path) is arguably safer than a bare PATH lookup. All four backing files are **byte-identical to upstream `f5633c1f`** (`git diff --name-only f5633c1f HEAD -- <the 4 files>` → empty) — zero fork bytes, which is why the merge was not blocked. **Tradeoff this row must decide, not assume:** fixing upstream-owned tests adds **permanent fork divergence** (ADR §9's accepted cost) and a recurring conflict surface on every future sync. Options: (a) fix in-fork and carry the divergence; (b) upstream the fix and wait; (c) skip-with-reason on Windows; (d) leave red and encode an expected-failure list (see #7). **Decide whether to fix — do not assume yes.** |
 | 7 | **Triage the 18 pre-existing test failures on `fork/main` (Windows)** | Measured during PR #9 against a clean `d42aa298` worktree | Predate the v13.11.0 merge — `fork/main` 220 tests / **18 fail**; post-merge branch 225 / 22 (delta +4 = item #6). Clusters: **ChromaMcpManager subprocess-kill (4)**; **HealthMonitor port probing (4)** — root cause identified: `spyOn(net,'createServer')` does not intercept on this box, so the probe hits real sockets; **`runOneTimeV12_4_3Cleanup` (5)**; plus one each of Logger-standards, ProcessManager, Spawn-Contract, hookCommand-stderr, writeJsonFileAtomic. **None touch a privacy path (verified).** Consequence beyond the failures themselves: the auto-merge policy's "full unit suite green" gate is **structurally unmeetable** on this fork, forcing every PR onto a hand-computed "no new regressions" delta — that recurring manual cost is the real damage. Deliverable: a per-cluster fix-or-quarantine call, and if any stay red, an **encoded expected-failure baseline** so the suite can gate automatically again instead of being read by hand. Pairs naturally with #6. |
 | 8 | **Postgres test-harness defect — `SET search_path` applied to `client` while the test passes `pool`** | Found during PR #9 §8.2 live-Postgres verification | `processSessionSummaryResponse persists kind=summary observation idempotently` fails with `relation "observation_generation_jobs" does not exist`. Root cause: the test passes `pool` while `SET search_path` was applied only to the `client` — so the pool hands out a **fresh connection still pointed at `public`**, where the table isn't. Harness bug, not product code; **pre-existing, not merge-caused**. Fix options: set `search_path` via the pool's connection options (so it applies to every pooled connection), or have the test use the same `client` the `search_path` was set on. Prefer the pool-options route — the one-shot pattern will silently re-break the moment any other test reaches for `pool`. Worth auditing the Postgres suite for the same client-vs-pool pattern. |
-| 9 | **`sync-marketplace` is Unix-only — `build-and-sync`'s worker-restart step can never run on Windows** | Confirmed live on Mark's Windows box, 2026-07-15 (also hit during PR #9) | `scripts/sync-marketplace.cjs:78` shells out to `rsync` via `execSync`; `rsync` is absent on stock Windows. Because `build-and-sync` = `npm run build && npm run sync-marketplace && (cd ~/.claude/plugins/marketplaces/thedotmack && npm run worker:restart)`, the `&&` **short-circuits at step 2 — so the documented worker-restart step never executes on Windows.** Meanwhile `CLAUDE.md` names Windows a supported platform and lists `build-and-sync` as *the* build command: the documented path is broken for a supported platform, and it fails looking like a plain rsync error rather than a skipped restart. `npm run build` alone (which emits the tracked bundles) is green — only sync + restart are affected. Options: replace `rsync` with a cross-platform copy (e.g. `fs.cp` with an exclude filter matching the existing `--delete --exclude` semantics), or gate the step per-platform. Note the `:force` variant and the beta-overwrite guard at :51–:56 share the same `rsync` path. |
+| ~~9~~ | ✅ **Shipped as [PR #11](https://github.com/mmackelprang/claude-mem/pull/11)** — retired, ID not reused. Filed as "`sync-marketplace` is Unix-only"; that framing was **wrong** — rsync was only 1 of 3 independent barriers (`cd ~/…` under cmd.exe, and nothing verifying the sync output is what the hooks load). See **Recently shipped** for the full write-up. | Confirmed live on Mark's Windows box, 2026-07-15 | Kept as a tombstone so #9 is never re-filed or re-used. |
 | 10 | **Watch item — Windows spawn path changed under v13.11.0; verify on real Windows during/after the pilot redeploy** | ADR 0002 / PR #9 — Phase 2 watch item | Upstream's shared spawn helper (`src/shared/spawn.ts`) replaced the fork's local wrapper, changing the Windows spawn path from `cmd.exe` to `C:\WINDOWS\system32\cmd.exe` (via `process.env.ComSpec ?? 'cmd.exe'`, :74). **Untested on real Windows** — upstream's CI fakes `platform:'win32'` on Linux, which is precisely the blind spot that makes item #6's tests pass there and fail here. Mark runs Windows, so this is a live surface, not hypothetical. Expected benign (an absolute path is arguably safer than a bare PATH lookup) — but "expected benign" and "verified" are different things, and this is the one behavioural runtime change on the Windows path in the entire merge. **Not a code change — a verification task.** Gate: Phase 2 pilot NAS redeploy (ADR §7.2, needs a Postgres volume snapshot first). Verify spawned subprocesses (Chroma MCP, worker, supervisor) start and terminate cleanly on real Windows. |
 
 ## Recently shipped
@@ -35,3 +39,33 @@
 | Item | PR | Notes |
 |------|----|-------|
 | Merge upstream v13.11.0 into fork (ADR 0002) | [#9](https://github.com/mmackelprang/claude-mem/pull/9) — merged `801059db`, 2026-07-15 | Not a queue row; recorded here because Backlog #5–#10 all trace to it. Merged on owner's call: the literal "full suite green" gate is unmeetable (18 pre-existing failures → #7), so the operative gate was **no new fork regressions** — proven empty, all 4 new-failure files byte-identical to upstream `f5633c1f`. R1 + R2 green against live Postgres (**but see #5 — R2's net is 2/3 without `CLAUDE_MEM_TEST_POSTGRES_URL`**). 4 upstream test defects **deferred, not fixed** (→ #6), logged per auto-merge gate 4. Merged with `--merge`, not `--squash`, deliberately: a squash would collapse `4c7f868c` and destroy its parentage of `f5633c1f`, undoing ADR §2's whole purpose. **Phase 2 (pilot NAS redeploy) NOT included** — separate change, gated on a Postgres volume snapshot per §7.2. Nothing pushed to `origin`. |
+| **`build-and-sync` never delivered a build on Windows** — three independent barriers, each fatal on its own. | [#11](https://github.com/mmackelprang/claude-mem/pull/11) — merged `399c28e1`, 2026-07-15 | **This shipped Backlog #9**, which is therefore retired (see below) — #9's ID is not reused. Details below. |
+
+### `build-and-sync` on Windows (shipped #11, retires Backlog #9) — the three barriers (for the record)
+
+Backlog **#9** filed this as "`sync-marketplace` is Unix-only". That framing was **wrong**, and PR #11
+shipped the real fix — so #9 is retired here rather than merged as open work. Fixing rsync alone would
+**not** have delivered the build; all three barriers had to go:
+
+1. **`rsync` is not installed on Windows.** `scripts/sync-marketplace.cjs` shelled out to it, so
+   `build-and-sync` died at step 2. The `&&` chain then skipped the cache sync *and* the worker restart.
+2. **`cd ~/…` does not work in npm's Windows shell.** Two separate sites (`bun install` inside the sync
+   script, and the `build-and-sync` worker-restart tail) used `cd ~/…`. npm's default script shell on
+   Windows is cmd.exe, which does not expand `~` — both failed with "The system cannot find the path
+   specified." **independently of the rsync breakage**, so installing rsync would have moved the failure,
+   not fixed it.
+3. **Nothing verified that the sync's output is what the hooks load.** The hook resolution order
+   (`$CLAUDE_PLUGIN_ROOT` → newest-mtime `cache/<version>/` → marketplace) is contractual, and
+   `sync-marketplace` did already target `cache/<version>` — but no check compared the built artifact
+   against the resolved one, so a sync that never ran, or landed somewhere outranked by a staler cache
+   dir, was completely silent. `scripts/verify-plugin-delivery.cjs` now fails the build on any mismatch.
+
+**Not a barrier, contrary to earlier notes:** "sync targets the marketplace dir but the cache dir wins."
+`sync-marketplace.cjs` has synced to `cache/<version>` since at least `56db0681`; that step was simply
+never reached because barrier 1 aborted the script first.
+
+**Resolution-order decision:** left unchanged (option (a) — sync into the `cache/<version>` dir the hooks
+already prefer). The order is pinned as contractual in `src/build/hook-shell-template.ts` and asserted
+byte-for-byte by `tests/infrastructure/plugin-distribution.test.ts`. Setting a machine-wide
+`CLAUDE_PLUGIN_ROOT` was rejected: it would repoint **every** Claude Code session on the box at the live
+working tree, so a mid-edit or half-built state would become the running plugin for every session at once.

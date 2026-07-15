@@ -5,16 +5,32 @@ Claude-mem is a Claude Code plugin providing persistent memory across sessions. 
 ## Build
 
 ```bash
-npm run build-and-sync        # Build, sync to marketplace, restart worker
+npm run build-and-sync        # Build, sync to the installed plugin, restart worker
+npm run verify:plugin-delivery # Check: will the hooks load the build in plugin/?
 ```
+
+`build-and-sync` ends by asserting that the plugin root the hooks resolve contains the build you just
+made, comparing by content hash. If it fails, the build did not reach the running plugin — fix that
+before assuming your change is live. (Version strings can't answer this: a fork build and the upstream
+release it descends from can both report the same version.)
 
 ## File Locations
 
 - **Source**: `<project-root>/src/`
 - **Built Plugin**: `<project-root>/plugin/`
-- **Installed Plugin**: `~/.claude/plugins/marketplaces/thedotmack/`
 - **Database**: `~/.claude-mem/claude-mem.db`
 - **Chroma**: `~/.claude-mem/chroma/`
+
+**Installed Plugin** — the hooks do *not* simply load the marketplace directory. They resolve a plugin
+root through this chain and take the first hit (order is contractual; see
+`src/build/hook-shell-template.ts`):
+
+1. `$CLAUDE_PLUGIN_ROOT` / `$PLUGIN_ROOT` — if the host injects one
+2. `~/.claude/plugins/cache/thedotmack/claude-mem/<version>/` — **newest mtime first**, not highest version
+3. `~/.claude/plugins/marketplaces/thedotmack/plugin` — fallback
+
+So a `cache/<version>/` directory normally wins, and the marketplace copy is only a fallback. `npm run
+verify:plugin-delivery` reports which root actually resolves.
 
 ## Requirements
 
