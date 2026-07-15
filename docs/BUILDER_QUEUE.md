@@ -4,7 +4,7 @@
 > Builder: branch from `main`, implement per the linked plan, run all gates in the plan's § Verification,
 > open a PR, and (per the auto-merge policy) merge on green. Do not re-plan — surface drift instead.
 >
-> **Last updated:** 2026-07-02 (Planner)
+> **Last updated:** 2026-07-15 (Builder)
 
 ## Legend
 
@@ -26,4 +26,34 @@
 
 ## Recently shipped
 
-_(none yet)_
+| # | Item | PR | Notes |
+|---|------|----|-------|
+| 5 | **`build-and-sync` never delivered a build on Windows** — three independent barriers, each fatal on its own. | #10 | See below. |
+
+### Item #5 — the three barriers (for the record)
+
+This was mis-scoped in earlier notes as a single "rsync is Unix-only" problem. Fixing rsync alone would
+**not** have delivered the build; all three had to go:
+
+1. **`rsync` is not installed on Windows.** `scripts/sync-marketplace.cjs` shelled out to it, so
+   `build-and-sync` died at step 2. The `&&` chain then skipped the cache sync *and* the worker restart.
+2. **`cd ~/…` does not work in npm's Windows shell.** Two separate sites (`bun install` inside the sync
+   script, and the `build-and-sync` worker-restart tail) used `cd ~/…`. npm's default script shell on
+   Windows is cmd.exe, which does not expand `~` — both failed with "The system cannot find the path
+   specified." **independently of the rsync breakage**, so installing rsync would have moved the failure,
+   not fixed it.
+3. **Nothing verified that the sync's output is what the hooks load.** The hook resolution order
+   (`$CLAUDE_PLUGIN_ROOT` → newest-mtime `cache/<version>/` → marketplace) is contractual, and
+   `sync-marketplace` did already target `cache/<version>` — but no check compared the built artifact
+   against the resolved one, so a sync that never ran, or landed somewhere outranked by a staler cache
+   dir, was completely silent. `scripts/verify-plugin-delivery.cjs` now fails the build on any mismatch.
+
+**Not a barrier, contrary to earlier notes:** "sync targets the marketplace dir but the cache dir wins."
+`sync-marketplace.cjs` has synced to `cache/<version>` since at least `56db0681`; that step was simply
+never reached because barrier 1 aborted the script first.
+
+**Resolution-order decision:** left unchanged (option (a) — sync into the `cache/<version>` dir the hooks
+already prefer). The order is pinned as contractual in `src/build/hook-shell-template.ts` and asserted
+byte-for-byte by `tests/infrastructure/plugin-distribution.test.ts`. Setting a machine-wide
+`CLAUDE_PLUGIN_ROOT` was rejected: it would repoint **every** Claude Code session on the box at the live
+working tree, so a mid-edit or half-built state would become the running plugin for every session at once.
