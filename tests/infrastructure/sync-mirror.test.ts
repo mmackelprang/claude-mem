@@ -116,6 +116,44 @@ describe('mirror', () => {
     expect(stats.preserved).toBeGreaterThanOrEqual(3);
   });
 
+  /**
+   * The prune pass must not decide protection from the DEST entry's current
+   * type. `plugin/data/` is a directory-only rule, but if dest holds a file (or
+   * a junction) at that name, a type-aware check stops matching and the path
+   * loses its protection — deleting exactly the data the exclude list exists to
+   * preserve. `plugin/data` does not exist in src, so the "present in src"
+   * short-circuit that saves .git/node_modules cannot save it either.
+   */
+  it('protects an excluded dest path even when its type is not a directory', () => {
+    write(src, 'a.txt');
+    write(dest, 'plugin/data', 'live data stored as a file, not a dir');
+
+    const stats = mirror({ src, dest, isExcluded: compileExcludes(['plugin/data/']) });
+
+    expect(existsSync(path.join(dest, 'plugin/data'))).toBe(true);
+    expect(stats.preserved).toBeGreaterThanOrEqual(1);
+  });
+
+  it('protects an excluded dest directory that is a junction, without following it', () => {
+    write(src, 'a.txt');
+    write(root, 'outside/precious.txt', 'must survive');
+    mkdirSync(path.join(dest, 'plugin'), { recursive: true });
+
+    let linked = false;
+    try {
+      symlinkSync(path.join(root, 'outside'), path.join(dest, 'plugin', 'data'), 'junction');
+      linked = true;
+    } catch {
+      // Unprivileged Windows sessions cannot create links.
+    }
+    if (!linked) return;
+
+    mirror({ src, dest, isExcluded: compileExcludes(['plugin/data/']) });
+
+    expect(existsSync(path.join(dest, 'plugin/data'))).toBe(true);
+    expect(readFileSync(path.join(root, 'outside/precious.txt'), 'utf-8')).toBe('must survive');
+  });
+
   it('does not copy excluded src entries', () => {
     write(src, 'a.txt');
     write(src, 'node_modules/huge/index.js');

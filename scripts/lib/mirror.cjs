@@ -188,6 +188,77 @@ function mirror({ src, dest, isExcluded = () => false }) {
 
   const stats = { copied: 0, deleted: 0, preserved: 0, skipped: [] };
 
+  /**
+   * Protection test for the PRUNE pass — deliberately type-agnostic.
+   *
+   * The copy pass asks `isExcluded(rel, isDir)` with the real type, so a
+   * directory-only rule (`plugin/data/`) correctly declines to match a file.
+   * Reusing that for prune would be a trap: there, `isDir` comes from whatever
+   * currently occupies the name in DEST. If `plugin/data` is a junction or a
+   * stray file rather than a real directory, a `dirOnly` rule stops matching,
+   * the path loses its protection, and we delete data the exclude list exists
+   * to preserve. Asking "would ANY rule match this name, as a file or as a
+   * directory?" removes the type from the decision entirely.
+   *
+   * This is intentionally MORE conservative than rsync, which would delete a
+   * file named `data` despite an `--exclude=data/` rule. Refusing to delete a
+   * path the caller named is the safe direction to err in a tool that prunes a
+   * live install; the cost is only that a protected name is never reclaimed.
+   */
+  const isProtected = (rel) => isExcluded(rel, true) || isExcluded(rel, false);
+
+  /**
+   * Delete one dest-only entry, preserving anything protected at or beneath it.
+   *
+   * A flat "not in src → rm -rf" prune has a hole: a dest-only DIRECTORY is
+   * removed wholesale, taking any protected descendants with it. The exclude
+   * list names `plugin/data`, not `plugin`, so `plugin` itself looks
+   * unprotected — deleting it destroys `plugin/data` anyway. That only stays
+   * hidden while the parent happens to exist in src (as `plugin/` does today);
+   * it becomes data loss the moment it doesn't. rsync has the same rule: it
+   * will not remove a directory that still holds protected content.
+   *
+   * Symlinks/junctions are removed as links and never recursed into, so a
+   * junction pointing outside the tree can never leak this deletion to its
+   * target.
+   *
+   * @returns {boolean} true if the entry was KEPT (protected, or holds
+   *   protected content), false if it was deleted.
+   */
+  function pruneDestEntry(fullPath, rel, st) {
+    if (isProtected(rel)) {
+      stats.preserved++;
+      return true;
+    }
+
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      removeEntry(fullPath, st);
+      stats.deleted++;
+      return false;
+    }
+
+    let children;
+    try {
+      children = fs.readdirSync(fullPath, { withFileTypes: true });
+    } catch {
+      children = [];
+    }
+
+    let keptAny = false;
+    for (const child of children) {
+      const childFull = path.join(fullPath, child.name);
+      const childSt = lstatOrNull(childFull);
+      if (!childSt) continue;
+      if (pruneDestEntry(childFull, `${rel}/${child.name}`, childSt)) keptAny = true;
+    }
+
+    if (keptAny) return true;
+
+    fs.rmdirSync(fullPath);
+    stats.deleted++;
+    return false;
+  }
+
   function walk(rel) {
     const srcDir = rel ? path.join(src, rel) : src;
     const destDir = rel ? path.join(dest, rel) : dest;
@@ -208,13 +279,7 @@ function mirror({ src, dest, isExcluded = () => false }) {
       const full = path.join(destDir, entry.name);
       const st = lstatOrNull(full);
       if (!st) continue;
-      const isDir = st.isDirectory() && !st.isSymbolicLink();
-      if (isExcluded(childRel, isDir)) {
-        stats.preserved++;
-        continue;
-      }
-      removeEntry(full, st);
-      stats.deleted++;
+      pruneDestEntry(full, childRel, st);
     }
 
     // --- copy: src → dest, skipping excluded entries.
