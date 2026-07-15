@@ -87,6 +87,41 @@ describe('parseFlagArgs — WS2 author seam allowlist', () => {
   });
 });
 
+// The boolean-coercion hazard is not specific to --actor: under strict:false
+// EVERY flag declared type:'string' yields boolean `true` when passed bare.
+// `?? default` does not rescue it (true is not nullish), so before sanitizing:
+//   `(options.scope ?? 'memories:read').split(',')` -> TypeError (crash)
+//   `options.name ?? 'server-api-key'`              -> persists the string "true"
+// parseFlagArgs drops valueless string flags so every read site's ?? applies.
+describe('parseFlagArgs — valueless string flags degrade to "not provided"', () => {
+  for (const flag of ['scope', 'scopes', 'team', 'project', 'name', 'limit', 'offset', 'status', 'actor'] as const) {
+    it(`drops a valueless --${flag} rather than yielding boolean true`, () => {
+      const values = parseFlagArgs(['create', `--${flag}`]) as Record<string, unknown>;
+      expect(values[flag]).toBeUndefined();
+    });
+  }
+
+  it('keeps real values for string flags', () => {
+    const v = parseFlagArgs(['create', '--scope', 'memories:read', '--name', 'k1']);
+    expect(v.scope).toBe('memories:read');
+    expect(v.name).toBe('k1');
+  });
+
+  it('does NOT strip --active, which is genuinely boolean', () => {
+    expect(parseFlagArgs(['list', '--active']).active).toBe(true);
+  });
+
+  it('a valueless --scope no longer crashes the scopes split', () => {
+    const options = parseFlagArgs(['create', '--scope']);
+    expect(() => (options.scope ?? options.scopes ?? 'memories:read').split(',')).not.toThrow();
+    expect((options.scope ?? options.scopes ?? 'memories:read').split(',')).toEqual(['memories:read']);
+  });
+
+  it('a valueless --name falls back instead of persisting the literal "true"', () => {
+    expect(parseFlagArgs(['create', '--name']).name ?? 'server-api-key').toBe('server-api-key');
+  });
+});
+
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 const q = (n: string) => `"${n.replaceAll('"', '""')}"`;
 function newKeyHash() {

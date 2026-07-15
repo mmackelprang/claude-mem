@@ -776,11 +776,31 @@ interface CliFlagValues {
   actor?: string;
 }
 
+// Every flag declared `type: 'string'` above. Under `strict: false`, parseArgs
+// hands back the BOOLEAN `true` for a trailing bare `--foo` (or `--foo --bar`)
+// even for these, so a value that TypeScript believes is `string | undefined`
+// can be `true` at runtime. `?? default` does NOT rescue it, because `true` is
+// not nullish -- so `(options.scope ?? 'memories:read').split(',')` throws, and
+// `options.name ?? 'server-api-key'` would persist the literal "true" as a key
+// name. Sanitizing here, at the single parse boundary, keeps the CliFlagValues
+// contract honest for every read site instead of guarding each one.
+const CLI_STRING_FLAGS = [
+  'scope',
+  'scopes',
+  'team',
+  'project',
+  'name',
+  'limit',
+  'offset',
+  'status',
+  'actor',
+] as const;
+
 // Exported for tests: the `actor` allowlist entry below is load-bearing and
 // invisible to a parent-diff at merge time (see ADR 0002 §4.5), so the suite
 // pins it by driving the real parser rather than hand-built literals.
 export function parseFlagArgs(argv: string[]): CliFlagValues {
-  return parseArgs({
+  const parsed = parseArgs({
     args: argv,
     options: {
       scope: { type: 'string' },
@@ -796,7 +816,18 @@ export function parseFlagArgs(argv: string[]): CliFlagValues {
     },
     strict: false,
     allowPositionals: true,
-  }).values as CliFlagValues;
+  }).values;
+
+  // Drop valueless string flags so they read as "not provided" and each call
+  // site's `?? default` fallback applies. `active` is genuinely boolean and is
+  // deliberately not in this list.
+  const values: Record<string, unknown> = { ...parsed };
+  for (const flag of CLI_STRING_FLAGS) {
+    if (flag in values && typeof values[flag] !== 'string') {
+      delete values[flag];
+    }
+  }
+  return values as CliFlagValues;
 }
 
 // Phase 10 — generation-worker-only entrypoint. Starts BullMQ workers against
