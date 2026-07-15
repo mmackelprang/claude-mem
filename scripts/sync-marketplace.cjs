@@ -4,7 +4,6 @@
 const { execFileSync } = require('child_process');
 const { existsSync, readFileSync } = require('fs');
 const path = require('path');
-const os = require('os');
 
 const { mirror, compileExcludes, readGitignorePatterns } = require('./lib/mirror.cjs');
 const { assertPluginDelivered } = require('./verify-plugin-delivery.cjs');
@@ -44,6 +43,21 @@ const MARKETPLACE_EXCLUDES = [
  *     for a version that sessions are actively running out of.
  */
 const CACHE_EXCLUDES = ['.git', 'node_modules', '.in_use'];
+
+/**
+ * Gitignore-derived excludes for a sync target, minus any path the sync
+ * deliberately manages itself.
+ *
+ * `syncManagedFiles` is the override mechanism: a gitignored path listed here
+ * is NOT excluded, so the sync still delivers it even though git ignores it.
+ * The set is empty today — root `.mcp.json` was the last entry and was dropped
+ * in #2411 — but the mechanism is intentional and pinned by
+ * `tests/install-non-tty.test.ts`.
+ */
+function getGitignoreExcludes(baseDir) {
+  const syncManagedFiles = new Set();
+  return readGitignorePatterns(baseDir).filter((line) => !syncManagedFiles.has(line));
+}
 
 function getCurrentBranch() {
   try {
@@ -102,7 +116,7 @@ try {
     mirror({
       src: ROOT_DIR,
       dest: INSTALLED_PATH,
-      isExcluded: compileExcludes([...MARKETPLACE_EXCLUDES, ...readGitignorePatterns(ROOT_DIR)]),
+      isExcluded: compileExcludes([...MARKETPLACE_EXCLUDES, ...getGitignoreExcludes(ROOT_DIR)]),
     })
   );
 
@@ -119,7 +133,7 @@ try {
     mirror({
       src: path.join(ROOT_DIR, 'plugin'),
       dest: cacheVersionPath,
-      isExcluded: compileExcludes([...CACHE_EXCLUDES, ...readGitignorePatterns(path.join(ROOT_DIR, 'plugin'))]),
+      isExcluded: compileExcludes([...CACHE_EXCLUDES, ...getGitignoreExcludes(path.join(ROOT_DIR, 'plugin'))]),
     })
   );
 
