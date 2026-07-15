@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { logger } from '../../utils/logger.js';
 import type { PostgresQueryable } from './utils.js';
 
 export const SERVER_POSTGRES_SCHEMA_VERSION = 3;
@@ -37,50 +38,71 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
 
   await client.query('BEGIN');
   try {
-    await client.query(PHASE_1_SCHEMA_SQL);
-    await client.query(
-      `
-        INSERT INTO server_beta_schema_migrations (version, description)
-        VALUES ($1, $2)
-        ON CONFLICT (version) DO NOTHING
-      `,
-      [1, 'phase 1 postgres observation storage foundation']
-    );
-    await client.query(
-      `
-        INSERT INTO server_beta_schema_migrations (version, description)
-        VALUES ($1, $2)
-        ON CONFLICT (version) DO NOTHING
-      `,
-      [2, 'phase 1 author seam: actor_id + api_key_id on observations/agent_events']
-    );
-    // Phase 2 visibility seam — one-time private backfill, guarded so it runs
-    // exactly once. The ADD COLUMN above stamped every existing row with the
-    // 'team' default; those rows are pre-visibility HISTORY, captured before any
-    // sharing intent existed, so we flip them all to 'private' (fail-safe:
-    // private-by-mistake beats leaked). Runs inside this startup transaction
-    // before the server accepts writes, so no legitimate go-forward 'team' row
-    // can be caught. On a fresh pilot DB the UPDATE matches 0 rows (no-op).
-    const phase2Applied = await client.query(
-      'SELECT 1 FROM server_beta_schema_migrations WHERE version = $1',
-      [3]
-    );
-    if (phase2Applied.rowCount === 0) {
-      await client.query(`UPDATE observations SET visibility = 'private'`);
-      await client.query(
-        `
-          INSERT INTO server_beta_schema_migrations (version, description)
-          VALUES ($1, $2)
-          ON CONFLICT (version) DO NOTHING
-        `,
-        [3, 'phase 2 visibility seam: visibility enum + one-time private backfill of pre-visibility rows']
-      );
-    }
+    await applyPhase1Migration(client);
+    await applyPhase2Migration(client);
+    await applyPhase3Migration(client);
     await client.query('COMMIT');
   } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('SYSTEM', 'postgres schema bootstrap failed, rolling back', {}, err);
     await client.query('ROLLBACK');
     throw error;
   }
+}
+
+// Each applyPhaseNMigration records its own migration row using the LITERAL N.
+// SERVER_POSTGRES_SCHEMA_VERSION means "latest schema version this build ships"
+// and must never appear in a migration row: stamping a phase row with the
+// constant would make that row's version float upward on every future schema
+// bump, and would satisfy the version-3 guard in applyPhase3Migration below —
+// silently skipping the one-time private backfill on every fresh database and
+// leaving pre-visibility history team-visible. See ADR 0002 §4.3.2.
+async function applyPhase1Migration(client: PostgresQueryable): Promise<void> {
+  await client.query(PHASE_1_SCHEMA_SQL);
+  await client.query(
+    `
+      INSERT INTO server_beta_schema_migrations (version, description)
+      VALUES ($1, $2)
+      ON CONFLICT (version) DO NOTHING
+    `,
+    [1, 'phase 1 postgres observation storage foundation']
+  );
+}
+
+async function applyPhase2Migration(client: PostgresQueryable): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO server_beta_schema_migrations (version, description)
+      VALUES ($1, $2)
+      ON CONFLICT (version) DO NOTHING
+    `,
+    [2, 'phase 1 author seam: actor_id + api_key_id on observations/agent_events']
+  );
+}
+
+// Phase 2 visibility seam — one-time private backfill, guarded so it runs
+// exactly once. The ADD COLUMN in PHASE_1_SCHEMA_SQL stamped every existing row
+// with the 'team' default; those rows are pre-visibility HISTORY, captured
+// before any sharing intent existed, so we flip them all to 'private'
+// (fail-safe: private-by-mistake beats leaked). Runs inside the startup
+// transaction before the server accepts writes, so no legitimate go-forward
+// 'team' row can be caught. On a fresh pilot DB the UPDATE matches 0 rows (no-op).
+async function applyPhase3Migration(client: PostgresQueryable): Promise<void> {
+  const alreadyApplied = await client.query(
+    'SELECT 1 FROM server_beta_schema_migrations WHERE version = $1',
+    [3]
+  );
+  if (alreadyApplied.rowCount !== 0) return;
+
+  await client.query(`UPDATE observations SET visibility = 'private'`);
+  await client.query(
+    `
+      INSERT INTO server_beta_schema_migrations (version, description)
+      VALUES ($1, $2)
+      ON CONFLICT (version) DO NOTHING
+    `,
+    [3, 'phase 2 visibility seam: visibility enum + one-time private backfill of pre-visibility rows']
+  );
 }
 
 interface PostgresPoolLike extends PostgresQueryable {

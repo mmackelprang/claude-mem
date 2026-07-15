@@ -2,7 +2,9 @@
 import { Database } from 'bun:sqlite';
 import { SessionStore } from '../sqlite/SessionStore.js';
 import { SessionSearch } from '../sqlite/SessionSearch.js';
+import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
 import { ChromaSync } from '../sync/ChromaSync.js';
+import { CloudSync } from '../sync/CloudSync.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH, DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -13,9 +15,10 @@ export class DatabaseManager {
   private sessionStore: SessionStore | null = null;
   private sessionSearch: SessionSearch | null = null;
   private chromaSync: ChromaSync | null = null;
+  private cloudSync: CloudSync | null = null;
 
   async initialize(): Promise<void> {
-    this.db = new Database(DB_PATH);
+    this.db = openConfiguredSqliteDatabase(DB_PATH);
     
     this.sessionStore = new SessionStore(this.db);
     this.sessionSearch = new SessionSearch(this.db);
@@ -28,14 +31,21 @@ export class DatabaseManager {
       logger.info('DB', 'Chroma disabled via CLAUDE_MEM_CHROMA_ENABLED=false, using SQLite-only search');
     }
 
+    // Cloud sync is active ⇔ token AND user id are both non-empty (no
+    // separate enabled flag). Inactive installs get null so the write-site
+    // `getCloudSync()?.notify()` nudges are free no-ops.
+    if (settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN !== '' && settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID !== '') {
+      this.cloudSync = new CloudSync(this.db, settings);
+    }
+
     logger.info('DB', 'Database initialized (shared connection)');
   }
 
   async close(): Promise<void> {
-    if (this.chromaSync) {
-      await this.chromaSync.close();
-      this.chromaSync = null;
-    }
+    this.chromaSync = null;
+
+    this.cloudSync?.stop();
+    this.cloudSync = null;
 
     this.sessionStore = null;
     this.sessionSearch = null;
@@ -63,6 +73,10 @@ export class DatabaseManager {
 
   getChromaSync(): ChromaSync | null {
     return this.chromaSync;
+  }
+
+  getCloudSync(): CloudSync | null {
+    return this.cloudSync;
   }
 
   getConnection(): Database {

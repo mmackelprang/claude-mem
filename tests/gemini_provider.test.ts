@@ -32,7 +32,6 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     lastPromptNumber: 1,
     cumulativeInputTokens: 0,
     cumulativeOutputTokens: 0,
-    pendingMessages: [],
     abortController: new AbortController(),
     generatorPromise: null,
     currentProvider: null,
@@ -145,7 +144,8 @@ describe('GeminiProvider', () => {
 
     mockDbManager = {
       getSessionStore: () => mockSessionStore,
-      getChromaSync: () => mockChromaSync
+      getChromaSync: () => mockChromaSync,
+      getCloudSync: () => null
     } as unknown as DatabaseManager;
 
     const mockPendingMessageStore = {
@@ -185,7 +185,6 @@ describe('GeminiProvider', () => {
       lastPromptNumber: 1,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
-      pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
       currentProvider: null,
@@ -220,7 +219,6 @@ describe('GeminiProvider', () => {
       lastPromptNumber: 2,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
-      pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
       currentProvider: null,
@@ -300,7 +298,6 @@ describe('GeminiProvider', () => {
       lastPromptNumber: 1,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
-      pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
       currentProvider: null,
@@ -343,7 +340,6 @@ describe('GeminiProvider', () => {
       lastPromptNumber: 1,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
-      pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
       currentProvider: null,
@@ -366,7 +362,6 @@ describe('GeminiProvider', () => {
       lastPromptNumber: 1,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
-      pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
       currentProvider: null,
@@ -399,7 +394,6 @@ describe('GeminiProvider', () => {
       lastPromptNumber: 1,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
-      pendingMessages: [],
       abortController: new AbortController(),
       generatorPromise: null,
       currentProvider: null,
@@ -444,7 +438,6 @@ describe('GeminiProvider', () => {
         lastPromptNumber: 1,
         cumulativeInputTokens: 0,
         cumulativeOutputTokens: 0,
-        pendingMessages: [],
         abortController: new AbortController(),
         generatorPromise: null,
         currentProvider: null,
@@ -490,7 +483,6 @@ describe('GeminiProvider', () => {
         lastPromptNumber: 1,
         cumulativeInputTokens: 0,
         cumulativeOutputTokens: 0,
-        pendingMessages: [],
         abortController: new AbortController(),
         generatorPromise: null,
         currentProvider: null,

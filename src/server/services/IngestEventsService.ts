@@ -4,7 +4,7 @@
 // `src/server/compat/SessionsObservationsAdapter.ts` (legacy translator).
 // Centralizes the transactional write (event row + outbox row + lifecycle
 // log) and the post-commit BullMQ enqueue so both call sites apply the
-// exact same SessionGenerationPolicy and outbox-then-publish guarantees.
+// exact same outbox-then-publish guarantees.
 //
 // This module MUST NOT import from src/services/worker/* — the whole point
 // of Phase 9 is to give the compat adapters a translation surface that
@@ -23,11 +23,6 @@ import { withPostgresTransaction } from '../../storage/postgres/pool.js';
 import { logger } from '../../utils/logger.js';
 import { buildServerJobId } from '../jobs/job-id.js';
 import type { GenerateObservationsForEventJob } from '../jobs/types.js';
-import {
-  buildEnqueueEventDecision,
-  scheduleDebouncedEventJob,
-  type ServerSessionGenerationPolicy,
-} from '../runtime/SessionGenerationPolicy.js';
 import { newId } from '../../storage/postgres/utils.js';
 import { PostgresServerSessionsRepository } from '../../storage/postgres/server-sessions.js';
 import { hasPrivateSessionMarker, type VisibilityLevel } from '../../shared/visibility.js';
@@ -143,7 +138,6 @@ export interface IngestEventsServiceOptions {
   // type and tests can swap in a fake. When this returns null, the outbox
   // row stays `queued` and Phase 3 startup reconciliation will publish it.
   resolveEventQueue: () => EventQueueLike | null;
-  sessionPolicy?: ServerSessionGenerationPolicy;
 }
 
 export interface EventQueueLike {
@@ -242,7 +236,7 @@ export class IngestEventsService {
 
     let enqueueState: EnqueueOutcome = 'skipped';
     if (txResult.outbox) {
-      enqueueState = await this.publishEventJob(txResult.event, txResult.outbox, opts);
+      enqueueState = await this.publishEventJob(txResult.event, txResult.outbox);
     }
     return { event: txResult.event, outbox: txResult.outbox, enqueueState };
   }
@@ -317,7 +311,7 @@ export class IngestEventsService {
 
     return Promise.all(txResults.map(async ({ event, outbox }) => {
       const enqueueState: EnqueueOutcome = outbox
-        ? await this.publishEventJob(event, outbox, opts)
+        ? await this.publishEventJob(event, outbox)
         : 'skipped';
       return { event, outbox, enqueueState };
     }));
@@ -326,40 +320,25 @@ export class IngestEventsService {
   private async publishEventJob(
     event: PostgresAgentEvent,
     outbox: PostgresObservationGenerationJob,
-    opts: IngestEventOptions = {},
   ): Promise<'enqueued' | 'queued_only'> {
     const queue = this.options.resolveEventQueue();
     if (!queue) {
       return 'queued_only';
     }
-    const policyOptions: { policy?: ServerSessionGenerationPolicy; debounceWindowMs?: number } = {};
-    if (this.options.sessionPolicy !== undefined) {
-      policyOptions.policy = this.options.sessionPolicy;
-    }
-    // Phase 2 — the persisted outbox payload is canonical for visibility (it was
-    // stamped inside the ingest tx). Read it back so the immediately-enqueued
-    // BullMQ job.data carries the same visibility the reconciliation path would.
-    const persistedVisibility =
-      (outbox.payload as { visibility?: VisibilityLevel | null } | undefined)?.visibility ?? null;
-    const decision = buildEnqueueEventDecision(
-      {
-        event,
-        outbox,
-        apiKeyId: opts.apiKeyId ?? null,
-        actorId: opts.actorId ?? null,
-        sourceAdapter: opts.sourceAdapter ?? event.sourceAdapter ?? null,
-        // Phase 12 — flow request_id into the BullMQ payload so the worker
-        // can emit it in [generation] logs and the audit row.
-        requestId: opts.requestId ?? null,
-        visibility: persistedVisibility,
-      },
-      policyOptions,
-    );
-    if (!decision.shouldEnqueue) {
-      return 'queued_only';
-    }
+    // Phase 2 (WS2 visibility seam) — visibility is NOT re-threaded here. The
+    // outbox payload was stamped with the resolved visibility inside the ingest
+    // transaction and is enqueued verbatim below, so the outbox row is the single
+    // source of truth for both this immediate publish and the startup
+    // reconciliation path. See ADR 0002 §4.3.5.
+    const jobId = outbox.bullmqJobId ?? buildServerJobId({
+      kind: 'event',
+      team_id: event.teamId,
+      project_id: event.projectId,
+      source_type: 'agent_event',
+      source_id: event.id,
+    });
     try {
-      await scheduleDebouncedEventJob(queue as never, decision);
+      await queue.add(jobId, outbox.payload);
       return 'enqueued';
     } catch (error) {
       logger.warn('SYSTEM', 'failed to publish event generation job to BullMQ', {

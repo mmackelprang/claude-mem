@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Server/team-mode vector recall. Lifts the proven cmem-sdk client.search()
-// algorithm (src/sdk/index.ts): Chroma vector query → hydrate full rows from
-// Postgres by UUID → Postgres FTS fallback on any Chroma failure. Hydration is
-// ALWAYS from Postgres (ADR 0001 §4-A), never local SQLite.
+// algorithm — Chroma vector query → hydrate full rows from Postgres by UUID →
+// Postgres FTS fallback on any Chroma failure. Hydration is ALWAYS from
+// Postgres (ADR 0001 §4-A), never local SQLite.
+// (The former src/sdk/index.ts was deleted upstream in v13.11.0; the live
+// equivalent of these semantics is ProviderObservationGenerator's Chroma
+// indexing path. See ADR 0002 §4.4.)
 //
 // OVERRIDE-A (security-critical): Phase 2 visibility is LIVE. buildWhere()
 // mirrors PostgresObservationRepository.search()'s predicate onto the Chroma

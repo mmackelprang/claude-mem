@@ -4,6 +4,81 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [13.11.0] - 2026-07-13
+
+## Worker-native cloud sync (PR #3182)
+
+The standalone `cloud-sync.mjs` daemon is retired. The worker now syncs memories itself — every local write nudges a background flusher that drains unsynced rows to cmem.ai, with no separate process to install or babysit.
+
+**New:**
+- `CloudSync` flusher: write-site nudges, 1.5s debounce coalescing write bursts, single-flight flush, 200-row/2MB pages, 30s request timeout, capped exponential backoff on failure
+- `GET /api/sync/status` — pending counts per kind, last flush time, last error
+- `/cloud-sync` skill — status checks, first-run credential migration from the legacy `.cloud-sync.env`, daemon retirement, and worker restart runbook
+
+**Fixed:**
+- Prompts now join through `sdk_sessions` to push their real `memory_session_id`/`project` instead of an unresolvable fallback — cloud-side prompt-to-session views (Summary ⇄ Prompt toggle, Replay) can now actually find their prompt
+- Schema v40 self-repair: on upgrade, every previously-synced prompt (including ones uploaded by the legacy daemon) is re-queued and re-pushed through the fixed mapper; a backfill lane header suppresses realtime broadcast storms during that re-push
+- Closed a race where a session's memory id registering while its prompt's upload was still in flight could leave that prompt permanently mis-keyed in the cloud — the stamp is now guarded per row and re-pushes with the corrected mapping instead
+
+**Migration:** fully automatic and backward compatible. Existing standalone cloud-sync users are migrated on first `/cloud-sync` run after upgrading; installs with no cloud sync configured are unaffected.
+
+## [13.10.3-community-edge.0] - 2026-07-09
+
+Community edge release for integrated batches 4-9. See PR #3172
+    and plans/2026-07-07-community-edge-batches-4-9-integration.md.
+
+## [13.10.2] - 2026-07-05
+
+Patch release focused on cross-platform stability and worker/runtime correctness.
+
+## Fixes
+- **Worker host**: clients now honor `CLAUDE_MEM_WORKER_HOST` (the address the server actually binds), with IPv6 literals bracketed correctly in health checks and display URLs.
+- **Worker identity**: cache/marketplace/MCP/CLI/restart launches converge on one worker bundle (stops version-skew from two builds on one port).
+- **Windows**: centralized spawn shims remove the `shell:true` footgun; codex hooks emit a Windows-executable command instead of a POSIX-only one.
+- **Install**: `repair` now restores the marketplace runtime root (not just the cache); ships the `plugin/sqlite` runtime modules that were causing `MODULE_NOT_FOUND` on clean installs.
+- **SQLite/settings**: atomic settings writes, `busy_timeout` to avoid `SQLITE_BUSY` under concurrent worker/hook access, a migration column re-check, and removal of an index create that could crash boot on legacy duplicate rows.
+- **Supervisor**: preserves `HTTPS_PROXY` and Bedrock/Vertex skip-auth env for the SDK subprocess.
+- **Worktree**: relative `gitdir:` pointers resolved correctly.
+
+## Docs
+- New Release Branches guide (main / core-dev / community-edge) with instructions for running the non-stable lines locally.
+
+Deliberately excluded: client-side observer truncation (kept out per #3096) and project-identity re-keying (kept the #2663 repo-root key).
+
+## [13.10.1] - 2026-07-04
+
+## Fixes
+
+- **Codex SessionStart hook no longer fails at startup.** When a hook errored before its handler ran (missing `session_id`, invalid `cwd`, or a missing transcript path), claude-mem fell back to a bare `{"continue":true}` regardless of which hook fired. Codex's strict `SessionStart` validator rejects that shape as "invalid session start JSON output," breaking context injection at Codex startup. The fallback now emits a valid `hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "" }` for the `context` hook, matching what Codex expects.
+- Fixed a related gap where the Codex adapter silently dropped an explicit empty-string `additionalContext` from its output instead of preserving it, which could leave the SessionStart payload incomplete.
+
+Closes #2947, #2972. Supersedes #2953 and #2948.
+
+## [13.10.0] - 2026-07-04
+
+## Antigravity CLI support, Gemini CLI removed
+
+Google deprecated Gemini CLI's free/individual tier (cutoff June 18, 2026) in favor of **Antigravity CLI**, the official successor announced May 19, 2026. This release migrates claude-mem accordingly.
+
+### Removed
+- Gemini CLI host integration (adapter, installer, IDE-detection entry, hooks, dedicated docs/tests). The separate, still-supported Gemini LLM/observation provider (`CLAUDE_MEM_GEMINI_API_KEY`, `GeminiProvider`) is unaffected.
+
+### Added
+- Full Antigravity CLI (`agy`) support at feature parity: hooks (7-event map sharing Gemini CLI's proven `~/.gemini/settings.json`), dual MCP server registration, and `GEMINI.md`/rules-file context injection.
+- `npx claude-mem antigravity-cli install|status|uninstall` subcommand support.
+
+Verified end-to-end against a real live Antigravity CLI install, including hook firing, MCP tool registration, and context injection.
+
+## [13.9.3] - 2026-07-03
+
+## Changes
+
+- fix: eliminate all 331 error-handling anti-patterns detected by scanner (#3119)
+- chore: repo-wide over-engineering cleanup — ponytail audit wave 1 & 2 (#3120)
+  - Removed dead code, unused dependencies, and unused cmem-sdk client surface
+
+**Full Changelog**: https://github.com/thedotmack/claude-mem/compare/v13.9.2...v13.9.3
+
 ## [13.9.2] - 2026-07-01
 
 ## Bug Fix

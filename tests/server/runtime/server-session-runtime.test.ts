@@ -9,68 +9,16 @@ import {
   type PostgresPoolClient,
   type PostgresStorageRepositories,
 } from '../../../src/storage/postgres/index.js';
-import { ServerSessionRuntimeRepository } from '../../../src/server/runtime/ServerSessionRuntimeRepository.js';
 import {
-  buildEnqueueEventDecision,
   buildSummaryJobId,
   buildSummaryJobPayload,
-  resolveSessionGenerationPolicy,
 } from '../../../src/server/runtime/SessionGenerationPolicy.js';
 import { processSessionSummaryResponse } from '../../../src/server/generation/processGeneratedResponse.js';
+import { quoteIdentifier } from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
-function quoteIdentifier(name: string): string {
-  return `"${name.replaceAll('"', '""')}"`;
-}
-
 describe('SessionGenerationPolicy (pure)', () => {
-  it('defaults to per-event when env is unset', () => {
-    const oldEnv = process.env.CLAUDE_MEM_SERVER_SESSION_POLICY;
-    delete process.env.CLAUDE_MEM_SERVER_SESSION_POLICY;
-    try {
-      const resolved = resolveSessionGenerationPolicy();
-      expect(resolved.policy).toBe('per-event');
-    } finally {
-      if (oldEnv !== undefined) process.env.CLAUDE_MEM_SERVER_SESSION_POLICY = oldEnv;
-    }
-  });
-
-  it('honors explicit policy override', () => {
-    expect(resolveSessionGenerationPolicy({ policy: 'debounce' }).policy).toBe('debounce');
-    expect(resolveSessionGenerationPolicy({ policy: 'end-of-session' }).policy).toBe('end-of-session');
-    expect(resolveSessionGenerationPolicy({ policy: 'per-event' }).policy).toBe('per-event');
-  });
-
-  it('per-event policy enqueues immediately with no delay', () => {
-    const decision = buildEnqueueEventDecision({
-      event: makeFakeEvent('e1', 's1'),
-      outbox: makeFakeOutbox('j1', 'e1'),
-    }, { policy: 'per-event' });
-    expect(decision.shouldEnqueue).toBe(true);
-    expect(decision.reason).toBe('per-event');
-    expect(decision.jobsOptions).toBeUndefined();
-  });
-
-  it('debounce policy enqueues with delay', () => {
-    const decision = buildEnqueueEventDecision({
-      event: makeFakeEvent('e1', 's1'),
-      outbox: makeFakeOutbox('j1', 'e1'),
-    }, { policy: 'debounce', debounceWindowMs: 1234 });
-    expect(decision.shouldEnqueue).toBe(true);
-    expect(decision.reason).toBe('debounce');
-    expect(decision.jobsOptions?.delay).toBe(1234);
-  });
-
-  it('end-of-session policy skips enqueue', () => {
-    const decision = buildEnqueueEventDecision({
-      event: makeFakeEvent('e1', 's1'),
-      outbox: makeFakeOutbox('j1', 'e1'),
-    }, { policy: 'end-of-session' });
-    expect(decision.shouldEnqueue).toBe(false);
-    expect(decision.reason).toBe('end-of-session-skip');
-  });
-
   it('summary job id is deterministic per server_session_id', () => {
     const a = buildSummaryJobId({ serverSessionId: 's1', teamId: 't', projectId: 'p' });
     const b = buildSummaryJobId({ serverSessionId: 's1', teamId: 't', projectId: 'p' });
@@ -110,7 +58,7 @@ describe('SessionGenerationPolicy (pure)', () => {
   });
 });
 
-describe('ServerSessionRuntimeRepository + Postgres', () => {
+describe('PostgresServerSessionsRepository + Postgres', () => {
   if (!testDatabaseUrl) {
     it.skip('requires CLAUDE_MEM_TEST_POSTGRES_URL', () => {});
     return;
@@ -120,7 +68,7 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
   let client: PostgresPoolClient;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
-  let runtime: ServerSessionRuntimeRepository;
+  let sessions: PostgresServerSessionsRepository;
   let teamId: string;
   let projectId: string;
 
@@ -131,7 +79,7 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
     await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
     await bootstrapServerPostgresSchema(client);
     storage = createPostgresStorageRepositories(client);
-    runtime = new ServerSessionRuntimeRepository({ client });
+    sessions = new PostgresServerSessionsRepository(client);
 
     const team = await storage.teams.create({ name: 'team' });
     const project = await storage.projects.create({ teamId: team.id, name: 'p' });
@@ -154,13 +102,13 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
     await pool.end();
   });
 
-  it('getActiveSession is idempotent on legacy no-platform external_session_id', async () => {
-    const a = await runtime.getActiveSession({
+  it('create is idempotent on legacy no-platform external_session_id', async () => {
+    const a = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'ext-1',
     });
-    const b = await runtime.getActiveSession({
+    const b = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'ext-1',
@@ -169,20 +117,20 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
     expect(a.externalSessionId).toBe('ext-1');
   });
 
-  it('getActiveSession scopes external_session_id by normalized platformSource', async () => {
-    const cursor = await runtime.getActiveSession({
+  it('create scopes external_session_id by normalized platformSource', async () => {
+    const cursor = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'shared-ext-runtime',
       platformSource: 'Cursor',
     });
-    const cursorAgain = await runtime.getActiveSession({
+    const cursorAgain = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'shared-ext-runtime',
       platformSource: 'cursor-cli',
     });
-    const codex = await runtime.getActiveSession({
+    const codex = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'shared-ext-runtime',
@@ -196,18 +144,18 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
   });
 
   it('endSession is idempotent and never duplicates summary jobs', async () => {
-    const session = await runtime.getActiveSession({
+    const session = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'ext-1',
     });
 
-    const ended1 = await runtime.endSession({ id: session.id, projectId, teamId });
+    const ended1 = await sessions.endSession({ id: session.id, projectId, teamId });
     expect(ended1?.endedAtEpoch).not.toBeNull();
     const firstEndedAt = ended1!.endedAtEpoch;
 
     // Re-end: should preserve original ended_at because of COALESCE.
-    const ended2 = await runtime.endSession({ id: session.id, projectId, teamId });
+    const ended2 = await sessions.endSession({ id: session.id, projectId, teamId });
     expect(ended2?.endedAtEpoch).toBe(firstEndedAt);
 
     // Now create a summary outbox row twice — UNIQUE on
@@ -232,7 +180,7 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
   });
 
   it('listUnprocessedEvents excludes events with completed jobs', async () => {
-    const session = await runtime.getActiveSession({
+    const session = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'ext-1',
@@ -280,7 +228,7 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
       status: 'completed',
     });
 
-    const unprocessed = await runtime.listUnprocessedEvents({
+    const unprocessed = await sessions.listUnprocessedEvents({
       teamId,
       projectId,
       serverSessionId: session.id,
@@ -289,37 +237,39 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
   });
 
   it('markPrivateSession persists privateSession=true on session metadata (summary-lane inheritance)', async () => {
-    const session = await runtime.getActiveSession({
+    // Upstream deleted ServerSessionRuntimeRepository; sessions.create() is the
+    // supported way to obtain a session (it upserts on externalSessionId). The
+    // assertion below is unchanged — this test guards ADR 0002 §4.3.3.
+    const session = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'ext-private',
     });
 
-    const sessionsRepo = new PostgresServerSessionsRepository(client);
     // Before: a fresh session is not private, so EndSessionService would resolve
     // no visibility and the summary would default to 'team'.
-    const before = await sessionsRepo.getByIdForScope({ id: session.id, projectId, teamId });
+    const before = await sessions.getByIdForScope({ id: session.id, projectId, teamId });
     expect((before?.metadata as Record<string, unknown>)?.privateSession).not.toBe(true);
 
-    await sessionsRepo.markPrivateSession({ id: session.id, projectId, teamId });
+    await sessions.markPrivateSession({ id: session.id, projectId, teamId });
 
     // After: the flag EndSessionService reads to stamp visibility='private' on the
     // summary payload is present. This is the exact metadata field the fix keys on.
-    const after = await sessionsRepo.getByIdForScope({ id: session.id, projectId, teamId });
+    const after = await sessions.getByIdForScope({ id: session.id, projectId, teamId });
     expect((after?.metadata as Record<string, unknown>)?.privateSession).toBe(true);
   });
 
-  it('cross-tenant getById returns null', async () => {
+  it('cross-tenant getByIdForScope returns null', async () => {
     const otherTeam = await storage.teams.create({ name: 'other' });
     const otherProject = await storage.projects.create({ teamId: otherTeam.id, name: 'other-p' });
-    const otherSession = await new PostgresServerSessionsRepository(client).create({
+    const otherSession = await sessions.create({
       teamId: otherTeam.id,
       projectId: otherProject.id,
       externalSessionId: 'other-1',
     });
 
     // Trying to read other team's session under our scope returns null.
-    const result = await runtime.getById({
+    const result = await sessions.getByIdForScope({
       id: otherSession.id,
       teamId,
       projectId,
@@ -328,7 +278,7 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
   });
 
   it('processSessionSummaryResponse persists kind=summary observation idempotently', async () => {
-    const session = await runtime.getActiveSession({
+    const session = await sessions.create({
       teamId,
       projectId,
       externalSessionId: 'ext-summary',
@@ -383,49 +333,3 @@ describe('ServerSessionRuntimeRepository + Postgres', () => {
     }
   });
 });
-
-function makeFakeEvent(id: string, sessionId: string | null) {
-  return {
-    id,
-    projectId: 'p',
-    teamId: 't',
-    serverSessionId: sessionId,
-    sourceAdapter: 'api',
-    sourceEventId: null,
-    idempotencyKey: 'k',
-    eventType: 'tool_use',
-    payload: {},
-    metadata: {},
-    occurredAtEpoch: 0,
-    receivedAtEpoch: 0,
-    createdAtEpoch: 0,
-  };
-}
-
-function makeFakeOutbox(id: string, eventId: string) {
-  return {
-    id,
-    projectId: 'p',
-    teamId: 't',
-    agentEventId: eventId,
-    sourceType: 'agent_event' as const,
-    sourceId: eventId,
-    serverSessionId: null,
-    jobType: 'observation_generate_for_event',
-    status: 'queued' as const,
-    idempotencyKey: 'k',
-    bullmqJobId: null,
-    attempts: 0,
-    maxAttempts: 3,
-    nextAttemptAtEpoch: null,
-    lockedAtEpoch: null,
-    lockedBy: null,
-    completedAtEpoch: null,
-    failedAtEpoch: null,
-    cancelledAtEpoch: null,
-    lastError: null,
-    payload: {},
-    createdAtEpoch: 0,
-    updatedAtEpoch: 0,
-  };
-}

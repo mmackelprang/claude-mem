@@ -6,7 +6,6 @@ import {
   isQuotaLimitedObserverOutput,
   previewOutput,
 } from '../../../sdk/output-classifier.js';
-import { ingestSummary } from '../http/shared.js';
 import { updateCursorContextForProject } from '../../integrations/CursorHooksInstaller.js';
 import { notifyTelegram } from '../../integrations/TelegramNotifier.js';
 import { updateFolderClaudeMdFiles } from '../../../utils/claude-md-utils.js';
@@ -208,16 +207,6 @@ export async function processAgentResponse(
     });
   }
 
-  if (summary && (summary.skipped || session.lastSummaryStored)) {
-    await ingestSummary({
-      kind: 'parsed',
-      sessionDbId: session.sessionDbId,
-      messageId: -1,
-      contentSessionId: session.contentSessionId,
-      parsed: summary,
-    });
-  }
-
   await sessionManager.confirmClaimedMessages(session.sessionDbId);
   session.earliestPendingTimestamp = null;
   worker?.broadcastProcessingStatus?.();
@@ -328,6 +317,8 @@ async function syncAndBroadcastObservations(
       }, error instanceof Error ? error : new Error(String(error)));
     });
 
+    dbManager.getCloudSync()?.notify();
+
     broadcastObservation(worker, {
       id: obsId,
       memory_session_id: session.memorySessionId,
@@ -413,6 +404,8 @@ async function syncAndBroadcastSummary(
     }, error instanceof Error ? error : new Error(String(error)));
   });
 
+  dbManager.getCloudSync()?.notify();
+
   broadcastSummary(worker, {
     id: result.summaryId,
     session_id: session.contentSessionId,
@@ -428,7 +421,7 @@ async function syncAndBroadcastSummary(
     created_at_epoch: result.createdAtEpoch
   });
 
-  updateCursorContextForProject(session.project, getWorkerPort()).catch(error => {
+  updateCursorContextForProject(session.project).catch(error => {
     logger.warn('CURSOR', 'Context update failed (non-critical)', { project: session.project }, error as Error);
   });
 }
