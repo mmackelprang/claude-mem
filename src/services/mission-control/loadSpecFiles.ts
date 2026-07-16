@@ -29,8 +29,7 @@ function walkMarkdown(dir: string): string[] {
  * `[]` — spec-review + doc-question mining are a clean no-op until #24 lands a
  * project-root strategy. No dangling `getPackageRoot()`-for-repo-files call.
  */
-export function loadSpecFiles(): { path: string; content: string }[] {
-  const root = resolveRepoRoot();
+export function loadSpecFiles(root: string | null = resolveRepoRoot()): { path: string; content: string }[] {
   if (root === null) return [];
   const files: { path: string; content: string }[] = [];
   for (const rel of SPEC_DIRS) {
