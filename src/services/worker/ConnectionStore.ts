@@ -12,6 +12,14 @@
 
 export const LOCAL_WORKER_ID = 'local-worker';
 
+/**
+ * Stable id for the profile synthesized from a pre-existing runtime=server
+ * install's canonical keys (see the adoption logic in applyToSettings). Fixed
+ * so adoption is idempotent — a second reconcile finds the profile and does
+ * not duplicate it.
+ */
+export const IMPORTED_SERVER_ID = 'imported-server';
+
 export type ConnectionRuntime = 'worker' | 'server';
 
 export interface ConnectionProfile {
@@ -67,8 +75,36 @@ export class ConnectionStore {
       profiles.unshift(localWorkerProfile());
     }
 
-    // Resolve active; fall back to the Local worker when the id is unknown/blank.
-    const requestedId = settings.CLAUDE_MEM_ACTIVE_CONNECTION ?? '';
+    // Back-compat adoption (do NOT remove): a pre-existing runtime=server
+    // install writes CLAUDE_MEM_RUNTIME/SERVER_* directly to settings.json
+    // (installer's setupServerRuntimeNonInteractive) and has NO
+    // CLAUDE_MEM_CONNECTIONS. On such a file loadFromFile synthesizes the
+    // defaults active='local-worker' + connections='[]', so the derivation
+    // below would resolve the Local worker as active and SILENTLY wipe the
+    // server keys on the next settings save — the exact silent-fallback this
+    // feature exists to eliminate. If the canonical keys say "server" with a
+    // URL but no server profile represents them, adopt those keys into an
+    // active server profile so the connection is preserved (and surfaced in
+    // the panel). Idempotent: once adopted, a server profile exists and this
+    // block is skipped.
+    const canonicalRuntime = (settings.CLAUDE_MEM_RUNTIME ?? '').trim().toLowerCase();
+    const canonicalUrl = (settings.CLAUDE_MEM_SERVER_URL ?? '').trim();
+    let adoptedActiveId: string | null = null;
+    if (!profiles.some(p => p.runtime === 'server') && canonicalRuntime === 'server' && canonicalUrl !== '') {
+      profiles.push({
+        id: IMPORTED_SERVER_ID,
+        name: 'Server',
+        runtime: 'server',
+        url: settings.CLAUDE_MEM_SERVER_URL ?? '',
+        apiKey: settings.CLAUDE_MEM_SERVER_API_KEY ?? '',
+        projectId: settings.CLAUDE_MEM_SERVER_PROJECT_ID ?? '',
+      });
+      adoptedActiveId = IMPORTED_SERVER_ID;
+    }
+
+    // Resolve active; a freshly-adopted server profile wins, otherwise the
+    // requested id, otherwise fall back to the Local worker (unknown/blank id).
+    const requestedId = adoptedActiveId ?? settings.CLAUDE_MEM_ACTIVE_CONNECTION ?? '';
     const active = profiles.find(p => p.id === requestedId) ?? profiles.find(p => p.id === LOCAL_WORKER_ID)!;
 
     const canonical =

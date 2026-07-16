@@ -108,7 +108,7 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
             <PresetMenu onPick={(preset) => { setEditor({ mode: 'add', preset }); test.reset(); }} />
             <button type="button" className="cm-btn" disabled={isLocalWorker(focused)}
               onClick={() => setEditor({ mode: 'edit', id: focused.id })}>Edit</button>
-            <button type="button" className="cm-btn" disabled={isLocalWorker(focused)}
+            <button type="button" className="cm-btn" disabled={isLocalWorker(focused) || test.running}
               onClick={() => runTest(focused)}>Test</button>
             <button type="button" className="cm-btn cm-btn-danger"
               disabled={isLocalWorker(focused) || focused.id === activeId}
@@ -220,7 +220,7 @@ function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
   // (Task 12.2 option a).
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); onCancel(); }
-    if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); if (isServer) runTest(draft); }
+    if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); if (isServer && !test.running) runTest(draft); }
   };
 
   return (
@@ -258,7 +258,7 @@ function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
       )}
 
       <div className="editor-actions">
-        {isServer && <button type="button" className="cm-btn cm-btn-primary" onClick={() => runTest(draft)}>Test connection</button>}
+        {isServer && <button type="button" className="cm-btn cm-btn-primary" disabled={test.running} onClick={() => runTest(draft)}>Test connection</button>}
         <button type="button" className="cm-btn" onClick={onCancel}>Cancel</button>
         <button type="button" className="cm-btn" onClick={() => onSave(draft)} disabled={!draft.name.trim()}>Save</button>
       </div>

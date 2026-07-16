@@ -38,7 +38,13 @@ export class SettingsRoutes extends BaseRouteHandler {
   private handleGetSettings = this.wrapHandler((req: Request, res: Response): void => {
     const settingsPath = paths.settings();
     this.ensureSettingsFile(settingsPath);
-    const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
+    // Reconcile connection profiles on read so the response is consistent with
+    // what a save would persist: seed the Local worker and, for a legacy
+    // runtime=server install with no CLAUDE_MEM_CONNECTIONS, adopt the canonical
+    // server keys into an active server profile. Without this, the panel would
+    // show the Local worker as active for such installs (misrepresenting the
+    // live runtime) until the first save. Pure transform — no write here.
+    const settings = ConnectionStore.applyToSettings(SettingsDefaultsManager.loadFromFile(settingsPath));
     res.json(settings);
   });
 
