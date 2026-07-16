@@ -27,10 +27,18 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [toast, setToast] = useState<string>('');
   const [testedMarks, setTestedMarks] = useState<Record<string, 'pass' | 'fail'>>({});
+  const [testedId, setTestedId] = useState<string | null>(null);
   const test = useConnectionTest();
 
   const focused = profiles.find(p => p.id === focusedId) ?? profiles[0];
   const isLocalWorker = (p: ConnectionProfile) => p.id === LOCAL_WORKER_ID;
+
+  // Run the probe AND record which profile it targets, so the ephemeral ✓/✗
+  // marker lands on the profile that was actually tested — not on whatever row
+  // happens to be `focused`. This matters for the Add flow, where the draft
+  // (a new, not-yet-saved id) is under test while `focused` is still the prior
+  // row (e.g. the Local worker), which must never be stamped with a result.
+  const runTest = (profile: ConnectionProfile) => { setTestedId(profile.id); test.runTest(profile); };
 
   const persist = (nextProfiles: ConnectionProfile[], nextActiveId: string) => {
     onSave({ ...settings, CLAUDE_MEM_CONNECTIONS: serializeConnections(nextProfiles), CLAUDE_MEM_ACTIVE_CONNECTION: nextActiveId });
@@ -56,10 +64,10 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
     if (focusedId === id) setFocusedId(activeId);
   };
 
-  // Ephemeral ✓/✗ marker for the focused row after a test run (handoff §4.1).
+  // Ephemeral ✓/✗ marker for the tested profile after a test run (handoff §4.1).
   useEffect(() => {
-    if (test.result && focused) {
-      setTestedMarks(m => ({ ...m, [focused.id]: test.result!.ok ? 'pass' : 'fail' }));
+    if (test.result && testedId) {
+      setTestedMarks(m => ({ ...m, [testedId]: test.result!.ok ? 'pass' : 'fail' }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [test.result]);
@@ -74,6 +82,7 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
           onCancel={() => { setEditor({ mode: 'closed' }); test.reset(); }}
           onSave={saveProfile}
           test={test}
+          runTest={runTest}
         />
       ) : (
         <>
@@ -100,7 +109,7 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
             <button type="button" className="cm-btn" disabled={isLocalWorker(focused)}
               onClick={() => setEditor({ mode: 'edit', id: focused.id })}>Edit</button>
             <button type="button" className="cm-btn" disabled={isLocalWorker(focused)}
-              onClick={() => test.runTest(focused)}>Test</button>
+              onClick={() => runTest(focused)}>Test</button>
             <button type="button" className="cm-btn cm-btn-danger"
               disabled={isLocalWorker(focused) || focused.id === activeId}
               title={isLocalWorker(focused) ? "The local worker is the built-in fallback and can't be deleted."
@@ -116,7 +125,7 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
             <TestStepper result={test.result} running={test.running} error={test.error}
               onActivate={() => activate(focused)}
               onEditKey={() => setEditor({ mode: 'edit', id: focused.id })}
-              onRetry={() => test.runTest(focused)}
+              onRetry={() => runTest(focused)}
               onSaveWithoutActivating={() => test.reset()} />
           )}
 
@@ -196,8 +205,9 @@ function PresetMenu({ onPick }: { onPick: (preset: PresetKind) => void }) {
   );
 }
 
-function ProfileEditor({ initial, onCancel, onSave, test }: {
-  initial: ConnectionProfile; onCancel: () => void; onSave: (p: ConnectionProfile) => void; test: ReturnType<typeof useConnectionTest>;
+function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
+  initial: ConnectionProfile; onCancel: () => void; onSave: (p: ConnectionProfile) => void;
+  test: ReturnType<typeof useConnectionTest>; runTest: (p: ConnectionProfile) => void;
 }) {
   const [draft, setDraft] = useState<ConnectionProfile>(initial);
   const [revealKey, setRevealKey] = useState(false);
@@ -210,7 +220,7 @@ function ProfileEditor({ initial, onCancel, onSave, test }: {
   // (Task 12.2 option a).
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); onCancel(); }
-    if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); if (isServer) test.runTest(draft); }
+    if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); if (isServer) runTest(draft); }
   };
 
   return (
@@ -248,14 +258,14 @@ function ProfileEditor({ initial, onCancel, onSave, test }: {
       )}
 
       <div className="editor-actions">
-        {isServer && <button type="button" className="cm-btn cm-btn-primary" onClick={() => test.runTest(draft)}>Test connection</button>}
+        {isServer && <button type="button" className="cm-btn cm-btn-primary" onClick={() => runTest(draft)}>Test connection</button>}
         <button type="button" className="cm-btn" onClick={onCancel}>Cancel</button>
         <button type="button" className="cm-btn" onClick={() => onSave(draft)} disabled={!draft.name.trim()}>Save</button>
       </div>
 
       {isServer && (test.running || test.result || test.error) && (
         <TestStepper result={test.result} running={test.running} error={test.error}
-          onActivate={() => onSave(draft)} onEditKey={() => {}} onRetry={() => test.runTest(draft)}
+          onActivate={() => onSave(draft)} onEditKey={() => {}} onRetry={() => runTest(draft)}
           onSaveWithoutActivating={() => onSave(draft)} />
       )}
     </div>
