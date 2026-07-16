@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Settings } from '../types';
 import {
   ConnectionProfile, LOCAL_WORKER_ID, PresetKind, parseConnections, serializeConnections,
@@ -53,9 +53,37 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
 
   const activate = (profile: ConnectionProfile) => {
     persist(profiles, profile.id);
+    setFocusedId(profile.id); // keep the action-bar selection (aria-checked) on the now-active row
     setToast(`✓ Activated “${profile.name}”. New captures use this connection.`);
     setTimeout(() => setToast(''), 4000);
     test.reset();
+  };
+
+  // Save the drafted profile AND make it active in a single write. Used by the
+  // editor's "Activate this connection" — a bare activate(draft) would set the
+  // active id to a profile not yet in the list (ConnectionStore would then fall
+  // back to the Local worker), so save-then-activate must be atomic.
+  const saveAndActivate = (profile: ConnectionProfile) => {
+    const exists = profiles.some(p => p.id === profile.id);
+    const next = exists ? profiles.map(p => (p.id === profile.id ? profile : p)) : [...profiles, profile];
+    persist(next, profile.id);
+    setFocusedId(profile.id); // select the now-active row so aria-checked tracks it
+    setToast(`✓ Activated “${profile.name}”. New captures use this connection.`);
+    setTimeout(() => setToast(''), 4000);
+    setEditor({ mode: 'closed' });
+    test.reset();
+  };
+
+  // Move roving focus between the radiogroup rows with arrow keys (handoff §8).
+  const onRadiogroupKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    e.preventDefault();
+    const idx = Math.max(0, profiles.findIndex(p => p.id === focusedId));
+    const dir = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1;
+    const next = profiles[(idx + dir + profiles.length) % profiles.length];
+    setFocusedId(next.id);
+    const rows = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    rows[(idx + dir + profiles.length) % profiles.length]?.focus();
   };
 
   const deleteProfile = (id: string) => {
@@ -72,6 +100,17 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [test.result]);
 
+  // Scope Esc to the inline delete-confirm so it dismisses the confirm rather
+  // than bubbling to the modal's window-level Escape→onClose.
+  useEffect(() => {
+    if (!confirmDeleteId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setConfirmDeleteId(null); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [confirmDeleteId]);
+
   return (
     <div className="connection-panel">
       <div className="context-chip"><span className="context-dot" />This viewer — Local worker</div>
@@ -81,6 +120,7 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
           initial={editor.mode === 'edit' ? profiles.find(p => p.id === editor.id)! : blankProfile(editor.preset)}
           onCancel={() => { setEditor({ mode: 'closed' }); test.reset(); }}
           onSave={saveProfile}
+          onActivate={saveAndActivate}
           test={test}
           runTest={runTest}
         />
@@ -91,10 +131,10 @@ export function ConnectionPanel({ settings, onSave, isSaving }: Props) {
             mark={testedMarks[activeId]} onFocus={setFocusedId} />
 
           <div className="subsection-label">PROFILES</div>
-          <div className="profile-list" role="radiogroup" aria-label="Active connection">
+          <div className="profile-list" role="radiogroup" aria-label="Active connection" onKeyDown={onRadiogroupKeyDown}>
             {profiles.map(p => (
               <ProfileRow key={p.id} profile={p} active={p.id === activeId} focused={focusedId === p.id}
-                mark={testedMarks[p.id]} onFocus={setFocusedId} />
+                mark={testedMarks[p.id]} onFocus={setFocusedId} inGroup />
             ))}
           </div>
 
@@ -156,12 +196,20 @@ function blankProfile(preset: PresetKind): ConnectionProfile {
   };
 }
 
-function ProfileRow({ profile, active, focused, mark, onFocus }: {
-  profile: ConnectionProfile; active: boolean; focused: boolean; mark?: 'pass' | 'fail'; onFocus: (id: string) => void;
+function ProfileRow({ profile, active, focused, mark, onFocus, inGroup = false }: {
+  profile: ConnectionProfile; active: boolean; focused: boolean; mark?: 'pass' | 'fail';
+  onFocus: (id: string) => void; inGroup?: boolean;
 }) {
   const subtitle = profile.runtime === 'worker' ? 'Captures to this machine — no server' : profile.url;
+  // In the radiogroup, aria-checked tracks the action-bar SELECTION (focused),
+  // and only the selected row is a tab stop (roving tabindex). The `· active`
+  // tag still conveys the running connection. The standalone ACTIVE summary row
+  // (inGroup=false) is a plain button, kept out of the tab order.
   return (
-    <button type="button" role="radio" aria-checked={active}
+    <button type="button"
+      role={inGroup ? 'radio' : undefined}
+      aria-checked={inGroup ? focused : undefined}
+      tabIndex={inGroup ? (focused ? 0 : -1) : -1}
       className={`profile-row ${focused ? 'focused' : ''}`} onClick={() => onFocus(profile.id)}>
       <span className={`radio-glyph ${active ? 'on' : ''}`} aria-hidden>{active ? '◉' : '◯'}</span>
       <span className="profile-main">
@@ -181,14 +229,35 @@ function ProfileRow({ profile, active, focused, mark, onFocus }: {
 
 function PresetMenu({ onPick }: { onPick: (preset: PresetKind) => void }) {
   const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const options: [PresetKind, string, string][] = [
     ['local', 'Local worker', 'Capture to this machine only.'],
     ['lan', 'LAN', 'A server on your home network.'],
     ['tailscale', 'Tailscale', 'A server over your tailnet, from anywhere.'],
     ['custom', 'Custom', 'Enter the full URL yourself.'],
   ];
+
+  // Dismiss on outside-click and on Esc — and stop the Esc from bubbling to the
+  // modal's window-level Escape→onClose (else opening the preset menu and
+  // hitting Esc would close the whole Settings modal).
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onDocKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onDocKeyDown);
+    };
+  }, [open]);
+
   return (
-    <div className="preset-menu">
+    <div className="preset-menu" ref={menuRef}>
       <button type="button" className="cm-btn cm-btn-primary" onClick={() => setOpen(o => !o)}>+ Add connection</button>
       {open && (
         <div className="preset-options" role="menu">
@@ -205,12 +274,14 @@ function PresetMenu({ onPick }: { onPick: (preset: PresetKind) => void }) {
   );
 }
 
-function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
+function ProfileEditor({ initial, onCancel, onSave, onActivate, test, runTest }: {
   initial: ConnectionProfile; onCancel: () => void; onSave: (p: ConnectionProfile) => void;
+  onActivate: (p: ConnectionProfile) => void;
   test: ReturnType<typeof useConnectionTest>; runTest: (p: ConnectionProfile) => void;
 }) {
   const [draft, setDraft] = useState<ConnectionProfile>(initial);
   const [revealKey, setRevealKey] = useState(false);
+  const keyRef = useRef<HTMLInputElement>(null);
   const isServer = draft.runtime === 'server';
   const set = (patch: Partial<ConnectionProfile>) => setDraft(d => ({ ...d, ...patch }));
 
@@ -227,11 +298,11 @@ function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
     <div className="profile-editor" onKeyDown={onKeyDown}>
       <div className="subsection-label">{initial.name ? 'Edit connection' : 'Add connection'}</div>
 
-      <label className="form-field">Name
+      <label className="form-field"><span className="form-field-label">Name</span>
         <input value={draft.name} placeholder="e.g. NAS (Tailscale)" onChange={e => set({ name: e.target.value })} />
       </label>
 
-      <label className="form-field">Runtime
+      <label className="form-field"><span className="form-field-label">Runtime</span>
         <select value={draft.runtime} onChange={e => set({ runtime: e.target.value as 'worker' | 'server' })}>
           <option value="server">Server</option>
           <option value="worker">Local worker</option>
@@ -240,18 +311,18 @@ function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
 
       {isServer && (
         <>
-          <label className="form-field">Server URL
+          <label className="form-field"><span className="form-field-label">Server URL</span>
             <input value={draft.url} placeholder="https://nas.tail1234.ts.net:37700" onChange={e => set({ url: e.target.value })} />
           </label>
-          <label className="form-field">API key
+          <label className="form-field"><span className="form-field-label">API key</span>
             <span className="key-input">
-              <input type={revealKey ? 'text' : 'password'} value={draft.apiKey} placeholder="Server API key"
+              <input ref={keyRef} type={revealKey ? 'text' : 'password'} value={draft.apiKey} placeholder="Server API key"
                 onChange={e => set({ apiKey: e.target.value })} />
               <button type="button" className="reveal-toggle" aria-pressed={revealKey} aria-label="Show API key"
                 onClick={() => setRevealKey(r => !r)}>{revealKey ? 'Hide' : 'Reveal'}</button>
             </span>
           </label>
-          <label className="form-field">Project ID
+          <label className="form-field"><span className="form-field-label">Project ID</span>
             <input value={draft.projectId} placeholder="Project to capture into" onChange={e => set({ projectId: e.target.value })} />
           </label>
         </>
@@ -265,7 +336,7 @@ function ProfileEditor({ initial, onCancel, onSave, test, runTest }: {
 
       {isServer && (test.running || test.result || test.error) && (
         <TestStepper result={test.result} running={test.running} error={test.error}
-          onActivate={() => onSave(draft)} onEditKey={() => {}} onRetry={() => runTest(draft)}
+          onActivate={() => onActivate(draft)} onEditKey={() => keyRef.current?.focus()} onRetry={() => runTest(draft)}
           onSaveWithoutActivating={() => onSave(draft)} />
       )}
     </div>

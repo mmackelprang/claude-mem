@@ -41,7 +41,7 @@ export function ServerConfigWizard({ serverContext }: { serverContext: boolean }
             <div className="current-config">
               <div>Provider <b>{current.provider}</b> · Model <b>{current.model}</b></div>
               <div>API key {current.keyPresent ? `set (${current.keySource})` : 'not set'}</div>
-              <div className="ingest-line">{ingestLabel(ingest)}</div>
+              {(() => { const i = ingestLabel(ingest); return <div className={`ingest-line ${i.status}`}>{i.text}</div>; })()}
             </div>
           ) : <div className="current-config">— no data yet</div>}
           <p className="section-description">
@@ -52,14 +52,14 @@ export function ServerConfigWizard({ serverContext }: { serverContext: boolean }
       )}
 
       <div className="subsection-label">GENERATE UPDATED CONFIG</div>
-      <label className="form-field">Model
+      <label className="form-field"><span className="form-field-label">Model</span>
         <select value={model} onChange={e => setModel(e.target.value)} aria-describedby="cost-warning">
           {SERVER_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
       </label>
       {isCostlyModel(model) && <p id="cost-warning" className="cost-warning">⚠ {COST_WARNING}</p>}
 
-      <label className="form-field">API key <span className="key-hint">(stays in your browser)</span>
+      <label className="form-field"><span className="form-field-label">API key <span className="key-hint">(stays in your browser)</span></span>
         <span className="key-input">
           <input type={revealKey ? 'text' : 'password'} value={apiKey} placeholder="sk-ant-…" onChange={e => setApiKey(e.target.value)} />
           <button type="button" className="reveal-toggle" aria-pressed={revealKey} aria-label="Show API key"
@@ -94,9 +94,11 @@ function maskKey(output: string): string {
   return output.replace(/(ANTHROPIC_API_KEY[=:]\s*)(.+)/, (_m, p1, val) =>
     val === '<paste your key>' ? `${p1}${val}` : `${p1}sk-ant-…`);
 }
-function ingestLabel(s: IngestStatus | null): string {
-  if (!s || s.lastObservationAt === null) return '— no data yet';
+/** Ingest signal as text + a status class so "✓ capturing" and "✗ no
+ *  observations" read differently by color, not just glyph (handoff §6.5). */
+function ingestLabel(s: IngestStatus | null): { text: string; status: 'ok' | 'fail' | 'none' } {
+  if (!s || s.lastObservationAt === null) return { text: '— no data yet', status: 'none' };
   const ageMin = Math.round((Date.now() / 1000 - s.lastObservationAt) / 60);
-  if (s.countLastWindow > 0) return `✓ capturing — last observation ${ageMin} min ago`;
-  return `✗ no observations in ${s.window}`;
+  if (s.countLastWindow > 0) return { text: `✓ capturing — last observation ${ageMin} min ago`, status: 'ok' };
+  return { text: `✗ no observations in ${s.window}`, status: 'fail' };
 }
