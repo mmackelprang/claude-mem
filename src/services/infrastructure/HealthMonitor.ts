@@ -33,20 +33,13 @@ async function httpRequestToWorker(
 }
 
 export async function isPortInUse(port: number): Promise<boolean> {
-  if (process.platform === 'win32') {
-    try {
-      const response = await fetch(`http://${formatHostForUrl(getWorkerHost())}:${port}/api/health`);
-      return response.ok;
-    } catch (error) {
-      if (error instanceof Error) {
-        logger.debug('SYSTEM', 'Windows health check failed (port not in use)', {}, error);
-      } else {
-        logger.debug('SYSTEM', 'Windows health check failed (port not in use)', { error: String(error) });
-      }
-      return false;
-    }
-  }
-
+  // Real `net` bind probe on ALL platforms (#17). The former win32 branch did an
+  // HTTP /api/health check instead, so a dead-but-bound port read as *free* on
+  // Windows — the one platform the orphaned-socket bug bites — making the
+  // "port bound but worker not responding → dead" diagnosis unreachable there.
+  // A bind probe correctly reports EADDRINUSE regardless of whether anything is
+  // accepting. (This also re-enables the 4 `isPortInUse` unit tests that mock
+  // `net.createServer`, which the win32 HTTP branch never called — Backlog #7.)
   return new Promise((resolve) => {
     const server = net.createServer();
     const workerHost = getWorkerHost();
