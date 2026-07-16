@@ -145,12 +145,24 @@ CLAUDE_MEM_SERVER_MODEL: claude-haiku-4-5-20251001
 
 **Without it, generation never runs — and the worker enters an infinite restart loop.**
 
+**Two variables are required, not one.** The provider is checked **first**, before any API key is read:
+
 ```yaml
 # on the claude-mem-worker service:
+CLAUDE_MEM_SERVER_PROVIDER: claude            # REQUIRED — checked before the key is even read
 ANTHROPIC_API_KEY: <your-anthropic-api-key>   # placeholder — never commit a real key
 ```
 
-Why it matters, precisely:
+> ⚠️ **`ANTHROPIC_API_KEY` alone is not enough.** `buildServerGenerationProviderFromEnv()` returns null immediately if
+> `CLAUDE_MEM_SERVER_PROVIDER` is empty (`create-server-service.ts:242-244`) — the key at `:258` is **never reached**.
+> The code's own disabled-reason says so: *"set CLAUDE_MEM_SERVER_PROVIDER **and** the matching API key to enable"*
+> (`:231-233`). The reference compose hides this behind a default
+> (`CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-claude}`, `docker-compose.yml:216`) — but **the NAS's
+> compose was hand-authored on-box and is not in this repo** ([§3](#3-deploy)), so **do not assume the default is
+> present there. Verify it on the box.** If it is missing, setting the API key fixes nothing and the crash loop
+> continues.
+
+Why the key matters, precisely:
 - Compose declares `ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}` — an **empty-string default, not unset**.
 - Empty key → `create-server-service.ts:258-259` returns null → no provider → `DisabledServerGenerationWorkerManager`.
 - Generation disabled → the worker process **exits 0** → compose `restart: unless-stopped` restarts it → **forever**.
@@ -160,7 +172,7 @@ Why it matters, precisely:
 > ⚠️ **`CLAUDE_MEM_ANTHROPIC_API_KEY` does not work under compose.** `create-server-service.ts:258` uses `??` (nullish
 > coalescing), and compose always defines `ANTHROPIC_API_KEY` as at least `""`. An empty string **is not nullish**, so
 > the chain short-circuits and the `CLAUDE_MEM_ANTHROPIC_API_KEY` fallback is **unreachable** — contradicting compose's
-> own comment. Setting only that variable silently does nothing. **Same defect on the `gemini` branch** (`:266`).
+> own comment. Setting only that variable silently does nothing. **Same defect on the `gemini` branch** (`:265`).
 > Tracked as **queue #14**. **Use `ANTHROPIC_API_KEY`.**
 
 **Sequencing (important):** setting this fixes the crash loop but fixes **zero** of the "nothing is captured" symptom —
@@ -199,11 +211,14 @@ The command prints JSON containing **`key`**, **`projectId`**, `teamId`, `scopes
 
 1. ⚠️ **`--scope` defaults to `memories:read`.** Omit the flag and you mint a **read-only** key
    (`ServerService.ts:519`). A contributor holding one gets **403 on every write** — writes require `memories:write`
-   (`ServerV1Routes.ts:70`, `ServerV1PostgresRoutes.ts:178`). **The existing teammate key on the box
+   (`ServerV1PostgresRoutes.ts:178`, the route surface this stack actually mounts). **The existing teammate key on the box
    (`/mnt/datapool/apps/claude-mem-pilot/teammate-readonly.key`) is read-only** — do not hand it to a contributor and
    expect writes to work.
 2. ⚠️ **Always pass `--actor <name>`.** It gives each person a distinct author identity (Phase 1 attribution).
-   Without it, `actor_id` is not per-teammate and attribution collapses.
+   Without it, `actor_id` falls back to `system:server-cli` (`ServerService.ts:474`) and attribution collapses.
+3. ℹ️ **`--name` is echoed, not stored.** `createApiKey()` persists only `keyHash`/`teamId`/`projectId`/`scopes`/
+   `actorId` (`ServerService.ts:539-545`); `name` appears in the printed JSON and nowhere else, so
+   `api-key list` cannot show it. **`--actor` is the durable identity** — don't rely on `--name` to label a key.
 
 Audit existing keys (metadata only, no secrets): `... server api-key list --active`.
 
@@ -227,7 +242,18 @@ Edit **`~/.claude-mem/settings.json`** on the *client* machine:
 ```
 
 > Remote/tailnet clients use `http://truenas-scale.taila02f52.ts.net:37877` instead.
-> Restrict the file: it holds a live key (the installer writes it `0600`).
+
+> 🔒 **Lock the file down yourself — nothing else will.** It holds a live API key.
+>
+> ```bash
+> chmod 600 ~/.claude-mem/settings.json
+> ```
+>
+> Do **not** assume the tooling did this. The only `chmod 0600` on `settings.json` lives in `persistServerSettings()`
+> (`server-bootstrap.ts:171`) — reachable **only** via the bootstrap path that, as shown below, **never runs on a
+> teammate machine**. The writer that actually runs (`mergeSettings` → `writeJsonFileAtomic`) creates a new file under
+> the **process umask** (`atomic-json.ts:77-86`), i.e. typically **`0644` — world-readable**. On Windows, set the
+> equivalent ACL.
 
 **Miss any one of the four → silent fallback to local worker mode.** The client keeps working, captures to its own
 local SQLite, and reports nothing wrong. That is the failure, and it is not loud.
@@ -238,8 +264,9 @@ local SQLite, and reports nothing wrong. That is the failure, and it is not loud
   this document.
 - ❗ **There are FOUR keys.** The onboarding runbook lists **three** — it **omits `CLAUDE_MEM_SERVER_PROJECT_ID`**,
   which `buildServerContext()` requires (`runtime-selector.ts:48-86`; the `projectId` guard is at `:83-86`). A client following that doc lands in exactly the
-  silent-fallback state. The canonical set is enumerated in-source at
-  `src/npx-cli/commands/server-runtime-setup.ts:22-30`.
+  silent-fallback state. For corroboration, `SERVER_RUNTIME_SETTINGS_KEYS`
+  (`src/npx-cli/commands/server-runtime-setup.ts:22-30`) lists these four as the keys an uninstall tears down — note it
+  holds **seven** entries: the four canonical keys plus three legacy `*_BETA_*` aliases, not seven distinct settings.
 - Legacy `CLAUDE_MEM_SERVER_BETA_*` names are still accepted as fallbacks; `CLAUDE_MEM_RUNTIME` accepts the legacy
   value `server-beta` as well as `server`.
 
@@ -250,8 +277,9 @@ Do not assume `npx claude-mem install --runtime server --server-url ...` configu
 1. It sets **only** `CLAUDE_MEM_RUNTIME` + `CLAUDE_MEM_SERVER_URL` (`install.ts:880`) — 2 of the 4 keys.
 2. It then tries to bootstrap a key, which **requires `CLAUDE_MEM_SERVER_DATABASE_URL`** — i.e. **direct Postgres
    access**. A teammate's machine does not have that (Postgres lives on the NAS and is not exposed).
-3. So `maybeBootstrapServerApiKey()` **skips**, logging: *"Hooks will fall back to the worker until you run
-   `npx claude-mem server keys rotate`"* (`install.ts:902-908`).
+3. So `maybeBootstrapServerApiKey()` **skips**, logging: *"Skipping local hook API key bootstrap:
+   CLAUDE_MEM_SERVER_DATABASE_URL is not set. Run `npx claude-mem server keys rotate` after configuring Postgres to
+   provision a key."* (`install.ts:903-906` — this is the string to grep your install output for).
 
 Result: `API_KEY` and `PROJECT_ID` are never written, and the client silently runs in worker mode. **Set the four keys
 by hand as above.** (The installer's bootstrap path is for a machine co-located with Postgres — not the teammate case.)
@@ -359,15 +387,27 @@ the pilot runbook's *"functionally complete"* claim — that was validated by **
 
 ### 8.3 Worker crash-loop (exits 0, restarts forever)
 
-**Symptom:** enormous restart count, ExitCode **0**, ~200ms lifetimes, **zero errors in the logs**, server health green.
+**Symptom:** enormous restart count, ExitCode **0**, ~200ms lifetimes, **no WARN/ERROR in the logs**, server health green.
+
+**Read the worker's own startup log first — it names the cause in one command.** The worker logs its generation
+boundary at startup, *including the disabled reason* (`ServerService.ts:849-853`):
+
+```bash
+sudo docker logs <worker-container> --tail 50
+```
+
+This is INFO, not ERROR — which is why "zero errors in 11 days" was true and useless at the same time. The reason
+string distinguishes the failure modes: *"no server generation provider configured; set CLAUDE_MEM_SERVER_PROVIDER and
+the matching API key to enable"* (`create-server-service.ts:231-233`) vs. a queue-disabled reason (`:225-227`).
 
 ```bash
 sudo docker ps -a --format '{{.Names}}\t{{.Status}}'   # look for a churning worker
 sudo docker inspect <worker-container> --format '{{.RestartCount}} {{.State.ExitCode}}'
 ```
 
-**Cause:** no provider key → generation disabled → nothing holds the event loop open → Node exits 0 → `restart:
-unless-stopped` → repeat. **Fix:** [§4.2](#42-set-anthropic_api_key-on-the-worker). Tracked as **queue #11**.
+**Cause:** no provider **or** no key → generation disabled → nothing holds the event loop open → Node exits 0 →
+`restart: unless-stopped` → repeat. **Fix:** [§4.2](#42-set-anthropic_api_key-on-the-worker) — and note it takes
+**both** `CLAUDE_MEM_SERVER_PROVIDER` **and** `ANTHROPIC_API_KEY`. Tracked as **queue #11**.
 
 > Note the code comment at `ServerService.ts:869-870` — *"Block forever … Without this the process would exit"* — is
 > **factually wrong** about the `await new Promise<void>(() => {})` at `:871`: an unsettled Promise is not a libuv
@@ -451,6 +491,10 @@ before relying on any of it.**
    not a mirror. Env-var *names* and defaults cited here come from the repo file and are accurate **for that file**;
    confirm the deployed app sets them the same way ([§3](#3-deploy)).
 3. **`POSTGRES_USER` / `POSTGRES_DB` values** — generated on-NAS, deliberately never transcribed ([§7.1](#71-baseline-the-event-count-on-the-nas)).
+3b. **Whether the deployed worker sets `CLAUDE_MEM_SERVER_PROVIDER`** — the *reference* compose defaults it to `claude`
+   (`docker-compose.yml:216`), but the NAS's compose is hand-authored and unverified (see #2). If it is absent there,
+   generation stays disabled **even with a valid `ANTHROPIC_API_KEY`**, because the provider is checked first
+   (`create-server-service.ts:242-244`). **Check the worker's env on the box** ([§4.2](#42-set-anthropic_api_key-on-the-worker)).
 4. **Whether the Tailscale ACL and the node rename were ever applied** — console-only actions, unprovable from the repo
    ([§8.6](#86-naslan-does-not-resolve), [§8.7](#87-remote-teammate-can-reach-nothing--can-reach-too-much)); queue #16.
 5. **Whether the `observations`/`agent_events` tables live in `public`** — the [§7](#7-verify-ingest-for-real) queries
