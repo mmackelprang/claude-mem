@@ -1,8 +1,12 @@
 # Setup — claude-mem server app on `nas.lan`
 
-**Audience:** whoever is configuring, repairing, or debugging the claude-mem server stack on the NAS, and anyone pointing a client at it.
+**Audience:** the **operator** — whoever is configuring, repairing, or debugging the claude-mem server stack on the NAS.
+**Just connecting a client?** If you are a **teammate** pointing your own machine at the already-running server, you
+want [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md) (repo root) — that is the canonical client-connection guide. This document
+covers only the server side and what the operator needs to know about the client contract.
 **Status:** current as of 2026-07-15. **Fork-only** — this is pilot infrastructure, not an upstream feature.
-**Scope:** prerequisites → deploy → configure → mint keys → point a client → verify ingest → troubleshoot.
+**Scope:** prerequisites → deploy → configure → mint keys → verify ingest → troubleshoot (server side). Client setup:
+[`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).
 
 ### Start here — what this document is, and is not
 
@@ -10,8 +14,11 @@
 > 11 days — while capturing **nothing**. So the job in front of you is almost certainly **configure + verify**, not
 > deploy.
 >
-> - **You are configuring/repairing the existing app** → this document is self-contained. Go to
->   [§4](#4-configure-the-stack) → [§6](#6-point-a-client-at-the-server) → [§7](#7-verify-ingest-for-real).
+> - **You are a teammate just connecting a client** → you are in the wrong document; go to
+>   [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md). Come back here only if the operator asks you to look at something on the NAS.
+> - **You are configuring/repairing the existing app** → this document is self-contained for the server side. Go to
+>   [§4](#4-configure-the-stack) → [§7](#7-verify-ingest-for-real). The client half lives in
+>   [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md) ([§6](#6-point-a-client-at-the-server) points there).
 > - **You are standing up a brand-new stack from scratch** → this document is **not sufficient on its own**.
 >   [§3](#3-deploy) hands you to the pilot runbook for the TrueNAS app-creation steps, which are not reproduced here.
 >   Read [§3](#3-deploy)'s gap notice before you start.
@@ -63,8 +70,8 @@ it is why server health tells you nothing about generation ([§8.1](#81-health-c
 
 **History / prior art** — read these for what was actually done, in order:
 - [`2026-07-03-nas-tailscale-pilot-runbook.md`](./2026-07-03-nas-tailscale-pilot-runbook.md) — the deploy itself, Tailscale, Phase 2/4.
-- [`2026-07-04-teammate-onboarding.md`](./2026-07-04-teammate-onboarding.md) — day-1 teammate flow. **Its client config section is
-  incomplete — see [§6](#6-point-a-client-at-the-server); prefer this document.**
+- [`2026-07-04-teammate-onboarding.md`](./2026-07-04-teammate-onboarding.md) — day-1 teammate flow (historical). **Its client
+  config section is incomplete and superseded — the canonical client guide is now [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).**
 - [`2026-07-06-tailscale-acl-and-rename-runbook.md`](./2026-07-06-tailscale-acl-and-rename-runbook.md) — tailnet ACL lockdown.
 - [`2026-07-06-pihole-nas-runbook.md`](./2026-07-06-pihole-nas-runbook.md) — unrelated PiHole app on the same NAS (context only).
 - Generic server reference (upstream, not NAS-specific): [`docs/server.md`](../server.md).
@@ -328,72 +335,27 @@ Audit existing keys (metadata only, no secrets): `... server api-key list --acti
 
 ## 6. Point a client at the server
 
-**This is the step that failed for 11 days. Get it exactly right.**
+**This is the step that failed for 11 days — but it is a client-side task, and its canonical home is now
+[`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).** Do not re-do it here; hand teammates that file. It owns the full procedure —
+the four `settings.json` keys, the file-permission lockdown, the installer caveat, and client-side verification — so it
+is not duplicated in this operator guide.
 
-### The four keys — all of them, in `settings.json`, not env vars
+As the **operator**, you need only two facts from it when debugging "why isn't the teammate's data arriving":
 
-Edit **`~/.claude-mem/settings.json`** on the *client* machine.
+1. **A client needs exactly four `settings.json` keys** — `CLAUDE_MEM_RUNTIME=server`, `CLAUDE_MEM_SERVER_URL`,
+   `CLAUDE_MEM_SERVER_API_KEY`, `CLAUDE_MEM_SERVER_PROJECT_ID` (`runtime-selector.ts:48-86`; the `projectId` guard is at
+   `:83-86`). **Miss any one → the client silently falls back to local worker mode**, keeps working, and reports nothing
+   wrong. They are `settings.json` keys, **not** env vars, and the fourth (`CLAUDE_MEM_SERVER_PROJECT_ID`) is the one
+   most often dropped. So when you [mint a key](#5-mint-api-keys), give the teammate **both** the `key` **and** the
+   `projectId` — `projectId` is not printed anywhere else convenient.
+2. **`npx claude-mem install` cannot finish the job on a teammate machine** — it writes only 2 of the 4 keys, and its
+   key-bootstrap needs direct Postgres access the teammate's machine does not have (`install.ts:880`, `:903-906`). So
+   **hand teammates [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md), not an install command**, and do not assume the installer
+   configured them.
 
-> ⚠️ **Merge these four keys into the existing file — do not replace it.** The file very likely already holds other
-> settings (the flat top-level shape is the modern format). Pasting the block below over the whole file clobbers them.
-> If the file does not exist yet, create it with exactly this content.
-
-```jsonc
-{
-  "CLAUDE_MEM_RUNTIME": "server",
-  "CLAUDE_MEM_SERVER_URL": "http://192.168.86.47:37877",
-  "CLAUDE_MEM_SERVER_API_KEY": "<key from §5>",
-  "CLAUDE_MEM_SERVER_PROJECT_ID": "<projectId from §5>"
-}
-```
-
-> Remote/tailnet clients use `http://truenas-scale.taila02f52.ts.net:37877` instead.
-
-> 🔒 **Lock the file down yourself — nothing else will.** It holds a live API key.
->
-> ```bash
-> chmod 600 ~/.claude-mem/settings.json
-> ```
->
-> Do **not** assume the tooling did this. The only `chmod 0600` on `settings.json` lives in `persistServerSettings()`
-> (`server-bootstrap.ts:171`) — reachable **only** via the bootstrap path that, as shown below, **never runs on a
-> teammate machine**. The writer that actually runs (`mergeSettings` → `writeJsonFileAtomic`) creates a new file under
-> the **process umask** (`atomic-json.ts:77-86`), i.e. typically **`0644` — world-readable**.
->
-> **On Windows**, break inheritance and grant only yourself:
->
-> ```powershell
-> icacls "$env:USERPROFILE\.claude-mem\settings.json" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
-> ```
-
-**Miss any one of the four → silent fallback to local worker mode.** The client keeps working, captures to its own
-local SQLite, and reports nothing wrong. That is the failure, and it is not loud.
-
-- ❗ **These are `settings.json` keys, NOT environment variables.** `selectRuntime()` reads
-  `loadFromFileOnce()` → `~/.claude-mem/settings.json` (`runtime-selector.ts:39-46`). **Exporting them in your shell
-  proves nothing and does nothing.** The teammate-onboarding runbook's *"settings.json or env"* is **wrong** — prefer
-  this document.
-- ❗ **There are FOUR keys.** The onboarding runbook lists **three** — it **omits `CLAUDE_MEM_SERVER_PROJECT_ID`**,
-  which `buildServerContext()` requires (`runtime-selector.ts:48-86`; the `projectId` guard is at `:83-86`). A client following that doc lands in exactly the
-  silent-fallback state. **Four keys — that is the whole set.** (Corroboration: `SERVER_RUNTIME_SETTINGS_KEYS`,
-  `src/npx-cli/commands/server-runtime-setup.ts:22-30`, is the uninstall teardown list. It contains these same four
-  plus three deprecated `*_BETA_*` aliases of them — read as seven lines, it is still four settings.)
-- Legacy `CLAUDE_MEM_SERVER_BETA_*` names are still accepted as fallbacks; `CLAUDE_MEM_RUNTIME` accepts the legacy
-  value `server-beta` as well as `server`.
-
-### ⚠️ The installer cannot finish this job on a client machine
-
-Do not assume `npx claude-mem install --runtime server --server-url ...` configures a teammate. It does **not**:
-
-1. It sets **only** `CLAUDE_MEM_RUNTIME` + `CLAUDE_MEM_SERVER_URL` (`install.ts:880`) — 2 of the 4 keys.
-2. It then tries to bootstrap a key, which **requires `CLAUDE_MEM_SERVER_DATABASE_URL`** — i.e. **direct Postgres
-   access**. A teammate's machine does not have that (Postgres lives on the NAS and is not exposed).
-3. So `maybeBootstrapServerApiKey()` **skips**, logging: *"Skipping local hook API key bootstrap:
-   CLAUDE_MEM_SERVER_DATABASE_URL is not set. Run `npx claude-mem server keys rotate` after configuring Postgres to
-   provision a key."* (`install.ts:903-906` — this is the string to grep your install output for).
-
-Result: `API_KEY` and `PROJECT_ID` are never written, and the client silently runs in worker mode. **Set the four keys
-by hand as above.** (The installer's bootstrap path is for a machine co-located with Postgres — not the teammate case.)
+Everything else about the client — the exact JSON block, the `chmod 600` / `icacls` lockdown against the world-readable
+`0644` default, and the `[server-fallback]` client-log diagnosis — is in
+[`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).
 
 ---
 
@@ -431,8 +393,11 @@ sudo docker exec <postgres-container> \
 
 ### 7.2 Drive a real client session
 
-On the client configured in [§6](#6-point-a-client-at-the-server), run an actual Claude Code session that does some
-tool work. This is the part that cannot be faked by a curl — the hooks must route to the server.
+On a client configured per [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md) (see [§6](#6-point-a-client-at-the-server)), run an
+actual Claude Code session that does some tool work. This is the part that cannot be faked by a curl — the hooks must
+route to the server. The teammate's own client-side check (their `[server-fallback]` hook log) is covered in
+[`TEAM-CONFIG.md` §5](../../TEAM-CONFIG.md#5-verify-your-sessions-actually-ingest--a-200-is-not-verification); this
+section is the **NAS-side** confirmation that rows actually landed.
 
 ### 7.3 Confirm the count moved
 
@@ -496,38 +461,22 @@ always, in a perfectly healthy stack**, because that container is *supposed* to 
 
 ### 8.2 Silent runtime fallback — "everything is green but nothing is captured"
 
-**The #1 failure.** The client is writing to its own local SQLite and never contacting the NAS.
-
-Diagnose in this order — it is two cheap steps:
-
-1. **Read the client's `~/.claude-mem/settings.json` for `CLAUDE_MEM_RUNTIME`.** Absent, or not `server`/`server-beta`?
-   **That is the truly silent path** — `resolveRuntimeContext()` returns `{runtime:'worker'}` with **no log
-   whatsoever** (`runtime-selector.ts:101-103`). No warning will ever exist. This matches the pilot's evidence.
-2. **If it *is* `server`,** grep the **client-side** hook log for `[server-fallback] reason=` — these paths *are*
-   loud and name the exact missing key: `reason=missing_base_url` / `missing_api_key` / `missing_project_id`
-   (`runtime-selector.ts:76,80,84`).
-
-   The log lives at **`~/.claude-mem/logs/claude-mem-<YYYY-MM-DD>.log`** — `LOGS_DIR = join(DATA_DIR, 'logs')`
-   (`src/shared/paths.ts:44`) and `claude-mem-${date}.log` with `date` = `toISOString().split('T')[0]`
-   (`src/utils/logger.ts:116`). Note it is **`claude-mem-<date>.log`, not `worker-<date>.log`** — that split has
-   already cost most of a debugging day (queue #17).
-
-   ```bash
-   grep -h "server-fallback" ~/.claude-mem/logs/claude-mem-*.log | tail -20
-   ```
-   ```powershell
-   # Windows
-   Select-String -Path "$env:USERPROFILE\.claude-mem\logs\claude-mem-*.log" -Pattern "server-fallback" | Select-Object -Last 20
-   ```
-
-   **No `[server-fallback]` line at all** (and `CLAUDE_MEM_RUNTIME` unset) → you are in case 1, the silent path.
-   If `CLAUDE_MEM_DATA_DIR` is set on the client, the logs follow it instead of `~/.claude-mem`.
+**The #1 failure, and the prime suspect for "the pilot has never ingested."** The client is writing to its own local
+SQLite and never contacting the NAS. **The diagnosis is entirely client-side — you cannot see it from the NAS**, so the
+step-by-step lives with the teammate procedure:
+[`TEAM-CONFIG.md` §6](../../TEAM-CONFIG.md#6-troubleshooting--what-you-can-diagnose-without-nas-access). In short: check
+the client's `~/.claude-mem/settings.json` for `CLAUDE_MEM_RUNTIME` — absent or not `server`/`server-beta` is the
+**truly silent path** (`resolveRuntimeContext()` returns `{runtime:'worker'}` with no log at all,
+`runtime-selector.ts:101-103`) — then grep the **client** hook log for `[server-fallback] reason=…`, which names the
+exact missing key.
 
 > The "zero WARN/ERROR in 11 days" evidence is from the **NAS**. A `[server-fallback]` warning appears on the
-> **client**. NAS logs cannot rule this out — look on the client.
+> **client** — NAS logs cannot rule this out. **Look on the client**, and have the teammate follow
+> [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).
 
-Fix: set all four keys ([§6](#6-point-a-client-at-the-server)). Tracked as **queue #13**, which also owns correcting
-the pilot runbook's *"functionally complete"* claim — that was validated by **E2E test writes, not an actual teammate**.
+Fix: the client sets all four keys ([`TEAM-CONFIG.md` §2](../../TEAM-CONFIG.md#2-set-the-four-keys--all-of-them-in-settingsjson-not-env-vars)).
+Tracked as **queue #13**, which also owns correcting the pilot runbook's *"functionally complete"* claim — that was
+validated by **E2E test writes, not an actual teammate**.
 
 ### 8.3 Worker crash-loop (exits 0, restarts forever)
 
@@ -565,16 +514,17 @@ See [§4.1](#41-set-claude_mem_server_model--or-silently-pay-3).
 
 ### 8.5 403 on write
 
-The key is **read-only**. `--scope` defaults to `memories:read`, and the pre-existing
-`teammate-readonly.key` is read-only. Mint a new key with `--scope memories:read,memories:write` and `--actor`
-([§5](#5-mint-api-keys)), or migrate the existing key's scopes (`server api-key migrate-scopes <id> --scope ...`).
-Reads succeeding while writes 403 is the tell.
+A teammate's writes 403 while reads succeed → their **key is read-only** (this is the operator-side fix for the
+teammate symptom in [`TEAM-CONFIG.md` §6](../../TEAM-CONFIG.md#6-troubleshooting--what-you-can-diagnose-without-nas-access)).
+`--scope` defaults to `memories:read`, and the pre-existing `teammate-readonly.key` is read-only. Mint a new key with
+`--scope memories:read,memories:write` and `--actor` ([§5](#5-mint-api-keys)), or migrate the existing key's scopes
+(`server api-key migrate-scopes <id> --scope ...`). Reads succeeding while writes 403 is the tell.
 
 ### 8.6 `nas.lan` does not resolve
 
-Expected on some machines, including Mark's. **Use `192.168.86.47`**, or add `192.168.86.47  nas.lan` to your hosts
-file. If you are remote, you want the tailnet name instead:
-`http://truenas-scale.taila02f52.ts.net:37877`.
+Expected on some machines, including Mark's. **Use `192.168.86.47`**, or the tailnet name
+`http://truenas-scale.taila02f52.ts.net:37877` if remote. The client-facing version, with the hosts-file fix, is in
+[`TEAM-CONFIG.md` §1](../../TEAM-CONFIG.md#1-before-you-start).
 
 > MagicDNS uses the host name **`truenas-scale`**, not the configured `claude-mem-nas` — cosmetic, but it means the
 > obvious name does not resolve. A rename to `claude-mem-nas` is proposed in the ACL runbook; **verify in the Tailscale

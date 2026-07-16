@@ -1,5 +1,10 @@
 # Day-1 onboarding — remote teammate → claude-mem team memory (pilot)
 
+> ⚠️ **Superseded — historical record.** The client-config section below is **incomplete** (it lists three keys and says
+> "settings.json or env"; both are wrong). The **canonical teammate guide is now [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md)**
+> — use it. Server-side detail lives in [`2026-07-15-nas-server-setup.md`](./2026-07-15-nas-server-setup.md). This file
+> is kept for history; do not follow its config steps.
+
 The pilot **server-beta** runs on the NAS, reachable over **Tailscale**:
 - **Tailnet address:** `http://truenas-scale.taila02f52.ts.net:37877` (tailnet IP `100.76.112.66`, tailnet `taila02f52.ts.net`)
 - Health: `curl http://truenas-scale.taila02f52.ts.net:37877/healthz` → `{"status":"ok","runtime":"server-beta"}`
