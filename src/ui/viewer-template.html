@@ -2391,6 +2391,74 @@
         transform: translateX(16px);
       }
     }
+
+/* ── Mission Control ─────────────────────────────────────────── */
+.view-toggle { display: flex; gap: 4px; padding: 8px 18px; background: var(--color-bg-tertiary); border-bottom: 1px solid var(--color-border-primary); }
+.view-toggle button { padding: 6px 14px; font-size: 13px; font-weight: 500; color: var(--color-text-secondary); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+.view-toggle button:hover { color: var(--color-text-primary); }
+.view-toggle button.active { color: #fff; background: var(--color-accent-primary); }
+.view-toggle button:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
+
+.mission-control { overflow-y: auto; height: 100vh; padding: 24px 18px; max-width: 760px; margin: 0 auto; }
+.mc-header { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.mc-refresh { padding: 6px 14px; font-size: 13px; color: var(--color-text-secondary); background: var(--color-bg-stat); border: 1px solid var(--color-border-primary); border-radius: 6px; cursor: pointer; }
+.mc-refresh:hover { color: var(--color-text-primary); }
+.mc-refresh:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
+
+.mc-pane { background: var(--color-bg-card); border: 1px solid var(--color-border-primary); border-radius: 8px; padding: 24px; margin-bottom: 24px; }
+.mc-pane h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 16px; color: var(--color-text-primary); }
+.mc-attention-group { margin-bottom: 20px; }
+.mc-attention-group h3, .subsection-label-mc { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--color-text-muted); margin: 0 0 8px; }
+.mc-pane ul { list-style: none; margin: 0; padding: 0; }
+
+/* Typed accent cards (reuse the 4 semantic families the viewer already ships). */
+.mc-item { padding: 10px 12px; margin-bottom: 8px; border-left: 3px solid var(--color-border-primary); border-radius: 6px; background: var(--color-bg-stat); }
+.mc-item.mc-type-escalation { border-left-color: var(--color-accent-error); background: color-mix(in srgb, var(--color-accent-error) 8%, var(--color-bg-card)); }
+.mc-item.mc-type-blocker    { border-left-color: var(--color-border-summary); background: var(--color-bg-summary); }
+.mc-item.mc-type-review     { border-left-color: var(--color-border-observation); background: var(--color-bg-observation); }
+.mc-item.mc-type-question   { border-left-color: var(--color-border-prompt); background: var(--color-bg-prompt); }
+
+.mc-item-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.mc-link { color: var(--color-accent-primary); text-decoration: none; }
+.mc-link:hover { text-decoration: underline; }
+.mc-link:focus-visible { box-shadow: var(--shadow-focus); outline: none; border-radius: 3px; }
+.mc-meta { font-family: var(--font-terminal); font-size: 11px; color: var(--color-text-tertiary); white-space: nowrap; }
+
+/* Escalation card (four-field). */
+.mc-escalation { padding: 14px; border: 1px solid var(--color-accent-error); border-left-width: 3px; border-radius: 6px; background: color-mix(in srgb, var(--color-accent-error) 8%, var(--color-bg-card)); margin-bottom: 10px; }
+.mc-urgency { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+.mc-urgency-high { color: var(--color-accent-error); }
+.mc-escalation-title { font-weight: 600; margin-left: 8px; color: var(--color-text-primary); }
+.mc-escalation-line { font-family: var(--font-terminal); font-size: 12px; color: var(--color-text-primary); margin: 8px 0; word-break: break-word; }
+.mc-field { display: grid; grid-template-columns: 52px 1fr; gap: 8px; font-size: 12px; color: var(--color-text-secondary); margin-top: 4px; }
+.mc-field-label { color: var(--color-text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; padding-top: 1px; }
+.mc-copy { font-family: var(--font-terminal); font-size: 11px; padding: 1px 6px; border: 1px solid var(--color-border-primary); border-radius: 4px; background: var(--color-bg-stat); cursor: pointer; }
+.mc-copy:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
+
+/* Progress rollup. */
+.mc-range { display: inline-flex; gap: 4px; float: right; }
+.mc-range button { font-size: 11px; padding: 3px 9px; border: 1px solid var(--color-border-primary); border-radius: 5px; background: var(--color-bg-stat); color: var(--color-text-secondary); cursor: pointer; }
+.mc-range button[aria-pressed="true"] { background: var(--color-accent-primary); color: #fff; border-color: transparent; }
+.mc-range button:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
+.mc-project > summary, .mc-project-header { cursor: pointer; font-weight: 600; color: var(--color-text-primary); padding: 6px 0; list-style: none; }
+.mc-project-rollup { font-size: 12px; color: var(--color-text-muted); font-weight: 400; margin-left: 8px; }
+.mc-team { border-top: 1px solid var(--color-border-primary); padding: 10px 0; }
+.mc-team-name { font-weight: 600; color: var(--color-text-primary); }
+.mc-team-sessions { font-size: 12px; color: var(--color-text-tertiary); margin-left: 8px; }
+.mc-outcome { font-size: 13px; color: var(--color-text-secondary); margin: 4px 0; }
+.mc-outcome-empty { font-size: 12px; color: var(--color-text-muted); font-style: italic; }
+.mc-obs-tail { font-size: 11px; color: var(--color-text-muted); font-family: var(--font-terminal); }
+
+/* Notes / states. */
+.mc-note { background: var(--color-bg-stat); border: 1px solid var(--color-border-primary); border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--color-text-secondary); margin-bottom: 12px; }
+.mc-empty { text-align: center; color: var(--color-text-muted); font-size: 13px; padding: 12px 0; }
+.mc-loading, .mc-error { background: var(--color-bg-card); border: 1px solid var(--color-border-primary); border-radius: 8px; padding: 24px; margin: 24px auto; max-width: 760px; }
+.mc-error { border-color: var(--color-accent-error); color: var(--color-accent-error); }
+.mc-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--color-text-tertiary); border: 1px solid var(--color-border-primary); border-radius: 4px; padding: 1px 6px; margin-left: 8px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .mc-pane { animation: slideIn 0.2s ease-out; }
+}
   </style>
 </head>
 
