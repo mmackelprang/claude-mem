@@ -8,6 +8,20 @@
 
 **Tech Stack:** TypeScript, **Bun** runtime (`worker-wrapper.cjs` → `bun.exe` → `worker-service.cjs`), Node-compat `http`/`net`, `child_process`/`Bun.spawnSync`, `powershell.exe` + `Get-CimInstance Win32_Process` for Windows process introspection (wmic is removed on Windows 11), `bun test` (`bun:test`).
 
+## ⚖️ RE-SCOPED to recovery-only (2026-07-16, Mark's call) — Task 2 DROPPED
+
+**What shipped is Tasks 3–6 (defense-in-depth recovery), NOT Task 2 (prevention).** Task 1's harness (retained) ran the reproduction across **12 runs / 4 spawn configs** escalating to production fidelity — including production's exact `cross-spawn` `stdio:['pipe','pipe','inherit']` path — and returned **`RESULT: PORT_FREE` every time**: the "Bun leaks the listening socket to the chroma-mcp child" premise does **not** reproduce on this box / **Bun 1.3.5**. A grandchild can only inherit a handle the *direct* child received, so the deep `uvx→uv→chroma-mcp→python` chain cannot leak what the worker→uvx spawn provably does not. That makes **Task 2 (`makeListenSocketNonInheritable`) unverifiable and it is DROPPED** — not implemented, not stubbed. If the leak is ever reproduced on a future Bun, re-open Task 2 with the harness as the gate.
+
+**Shipped (recovery-only, this PR):**
+- **Task 3** — delete the win32 `isPortInUse` HTTP branch → real `net` bind probe on all platforms. Also **greens the 4 failing `HealthMonitor > isPortInUse` tests (Backlog #7)** — they mock `net.createServer`, which the win32 branch never called.
+- **Task 4** — surface the real bind error on `worker start` (`describeStartFailure`) + fix `package.json` `worker:logs`/`worker:tail` (they tailed `worker-<date>.log`, which the logger never writes; real errors go to `claude-mem-<date>.log`).
+- **Task 5** — orphan reaper (`reapOrphanedChroma`) by **image + command-line + age** (NOT PPID tree) on a dead-but-bound `EADDRINUSE`, then retry the bind once. Win32-only; only reachable after the live-worker-healthy path has exited, so a healthy worker's chroma is never touched. Validated against a **synthetic** orphan (spawn → enumerate via CIM → match → `taskkill /F` → port freed), never against the live chroma.
+- **Task 6** — local crash-loop liveness signal (`buildCrashLoopDiagnosis`), emitted once per streak at the fail-loud threshold. (The docker-compose worker `healthcheck:` remains **Backlog #11's** deliverable, not this PR.)
+
+**Merge posture:** the reaper kills processes (a risk trigger), so this PR is **opened and left for Mark to merge** — NOT auto-merged.
+
+**Task 2 below is retained for the record but marked DROPPED.** Tasks 1, 3, 4, 5, 6 shipped as written.
+
 ## Global Constraints
 
 - **This bug reproduces ONLY on real Windows under Bun.** Upstream CI fakes `platform:'win32'` on Linux, which is precisely the blind spot that hid it. Every fix that changes Windows behavior gets a **real-Windows UAT step** (run on Mark's box) in addition to any `bun test` unit test. Unit tests that would bind real ports or shell to PowerShell are `describe`/`it`-gated to `process.platform === 'win32'` and skipped elsewhere, mirroring the project's "`.skip` off-platform, run locally pre-merge" convention.
@@ -189,7 +203,9 @@ git commit -m "test(win): add orphaned listening-socket reproduction harness"
 
 ---
 
-### Task 2: Root cause — mark the listen socket non-inheritable (Windows/Bun)
+### Task 2: Root cause — mark the listen socket non-inheritable (Windows/Bun) — ⛔ DROPPED (not reproducible on Bun 1.3.5; see the re-scope banner above)
+
+> **DROPPED 2026-07-16.** Task 1's harness proved the prevention premise does not reproduce (12 runs / 4 configs = `PORT_FREE`). This section is retained for the record only — none of it was implemented. Recovery (Tasks 3–6) makes the symptom self-healing regardless.
 
 Prevent every `chroma-mcp`/`uvx` spawn (initial and every reconnect) from inheriting the HTTP listen socket. **Reordering "bind after spawning children" is NOT sufficient and is explicitly rejected as the primary fix:** chroma is spawned lazily on first search and re-spawned on every transport reconnect (`ChromaMcpManager` `RECONNECT_BACKOFF_MS = 10_000`, `connectInternal`), each time while the server socket is open — so it would re-inherit on every reconnect. Only clearing the handle's inherit flag closes it for good.
 
