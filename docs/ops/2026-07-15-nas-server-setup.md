@@ -4,8 +4,8 @@
 **Status:** current as of 2026-07-15. **Fork-only** — this is pilot infrastructure, not an upstream feature.
 **Scope:** prerequisites → deploy → configure → mint keys → point a client → verify ingest → troubleshoot.
 
-> ### Start here — what this document is, and is not
->
+### Start here — what this document is, and is not
+
 > **The stack is already deployed on the NAS.** It is running right now, and every health probe has returned 200 for
 > 11 days — while capturing **nothing**. So the job in front of you is almost certainly **configure + verify**, not
 > deploy.
@@ -76,7 +76,15 @@ it is why server health tells you nothing about generation ([§8.1](#81-health-c
 **On the NAS:**
 1. TrueNAS SCALE with the Docker-based Apps backend (24.10 "Electric Eel" or later). The pilot deliberately did **not**
    install anything on the TrueNAS host OS — the managed base wipes host changes on update.
-2. SSH access as `claude` with sudo (key auth; the pilot uses a dedicated ed25519 key).
+2. **SSH access as `claude` with sudo.** Key auth only — **password auth is not available** (the pilot host has no
+   `sshpass` path and was set up key-only), so you cannot get in without an authorized key.
+   - **Getting access:** generate a keypair (`ssh-keygen -t ed25519`) and have **Mark authorize your public key** —
+     TrueNAS → Credentials → Local Users → the `claude` user → **Authorized Keys**. That user must have a real shell
+     (bash/zsh, not nologin) and sudo. Access is revoked by removing the line.
+   - The pilot's own dedicated key is `~/.ssh/claude_nas_pilot_ed25519` **on Mark's machine** — it is not shared, and
+     it is not in this repo. If you are not Mark, you need your own key authorized.
+   - Test before going further: `ssh claude@192.168.86.47 'sudo docker ps'` should list containers without prompting
+     for a password.
 3. Free space on the app pool for the Postgres/Chroma volumes.
 
 **On your machine:**
@@ -114,7 +122,9 @@ For a **fresh** stand-up, follow the pilot runbook's Steps 3–5
 actually done: detect the SCALE version/backend, install the Tailscale app, then create the custom app from a compose
 modeled on the repo's `docker-compose.yml`.
 
-**Two deploy facts that have already bitten this pilot — do not skip:**
+**Two facts that have already bitten this pilot.** Both apply to **redeploys** — building/shipping a new image. If you
+are only changing env vars on the existing app ([§4](#4-configure-the-stack)), #1 does not apply to you; **#2's snapshot
+gate may still** — see the snapshot notice in [§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it).
 
 1. **Regenerate the server bundle before deploying.** A source-only merge leaves `plugin/scripts/server-service.cjs`
    stale and ships the wrong schema version. This has happened: the pilot once shipped at schema v1 after a merge
@@ -147,6 +157,13 @@ pre-auth key brought the node online immediately and restarts went `29 → 0`.
 
 This is where installs silently break. Three settings decide whether you get a working, affordable install.
 
+> ⚠️ **If you jumped straight to this section: the subsections are not in running order.** Do
+> **[§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it) first**, then go to
+> [§5](#5-mint-api-keys) → [§6](#6-point-a-client-at-the-server) → [§7.1–7.3](#7-verify-ingest-for-real) and **come back
+> for §4.1–4.2**. Generation (§4.1/§4.2) is downstream of ingest (§6): configuring it before a client can reach the box
+> leaves an enabled provider idle on an empty queue, proving nothing. Full order in
+> [Start here](#start-here--what-this-document-is-and-is-not).
+
 ### 4.0 How to apply a config change (do this first — the rest of §4 assumes it)
 
 Every §4 change is an **environment variable on a service in the `claude-mem` custom app's compose**. The YAML snippets
@@ -155,13 +172,26 @@ below are fragments to merge into the relevant service's `environment:` block �
 The app is a **TrueNAS custom app**, so its compose is edited through TrueNAS, not through this repo:
 
 > **TrueNAS UI:** Apps → **`claude-mem`** → **Edit** → the custom-app YAML → apply the change → **Update/Save**.
-> TrueNAS redeploys the affected containers.
+> TrueNAS redeploys the affected containers. **The Edit view is also how you *read* the current YAML** — there is no
+> repo-verifiable CLI command to dump it (`docker inspect` shows the *already-applied* env of a running container, not
+> the compose source; see the check below).
 
 > ⚠️ **Verify this path on the box before relying on it.** The exact UI wording varies by SCALE version, and **this
 > step was not executed while writing this document**. What *is* recorded: the pilot changed live app config
 > programmatically via **`app.update`** (that is how the Tailscale `auth_key` was set — see the pilot runbook), so a
-> `midclt call app.update ...` route exists if the UI is awkward. **Editing the repo's `docker-compose.yml` does
+> `midclt`-based route exists if the UI is awkward. **This document deliberately does not print a `midclt` command
+> line** — the exact signature was not verified, and a fabricated one here would be worse than none. Discover it on the
+> box (TrueNAS API docs / `midclt call core.get_methods`) or use the UI. **Editing the repo's `docker-compose.yml` does
 > nothing to the NAS** — that file is a reference, not the deployed artifact ([§3](#3-deploy)).
+
+> 🛑 **Snapshot gate — resolve this before your first change.** Any §4 change redeploys containers, and
+> [§3](#3-deploy) carries [ADR 0002](../architecture/decisions/2026-07-14-upstream-v13.11.0-fork-merge.md) §7.2's
+> requirement to snapshot the Postgres volume **before any redeploy** — while admitting the dataset path is recorded
+> nowhere in this repo. **These two facts collide on exactly the path you are about to take, and this document cannot
+> resolve it for you.** The gate is written for redeploys carrying a new image/schema; whether it binds an env-only
+> change that merely restarts a container **is not something this document can answer from the repo** — do not assume
+> either way. **Confirm the intent with Mark (or read ADR 0002 §7.2 yourself) before the first §4 change.** The pilot's
+> data is sparse but real, and this is the irreversible one.
 
 **After any change, confirm it actually landed in the container** — do not assume the redeploy took:
 
@@ -473,9 +503,25 @@ Diagnose in this order — it is two cheap steps:
 1. **Read the client's `~/.claude-mem/settings.json` for `CLAUDE_MEM_RUNTIME`.** Absent, or not `server`/`server-beta`?
    **That is the truly silent path** — `resolveRuntimeContext()` returns `{runtime:'worker'}` with **no log
    whatsoever** (`runtime-selector.ts:101-103`). No warning will ever exist. This matches the pilot's evidence.
-2. **If it *is* `server`,** grep the **client-side** hook logs for `[server-fallback] reason=` — these paths *are*
+2. **If it *is* `server`,** grep the **client-side** hook log for `[server-fallback] reason=` — these paths *are*
    loud and name the exact missing key: `reason=missing_base_url` / `missing_api_key` / `missing_project_id`
    (`runtime-selector.ts:76,80,84`).
+
+   The log lives at **`~/.claude-mem/logs/claude-mem-<YYYY-MM-DD>.log`** — `LOGS_DIR = join(DATA_DIR, 'logs')`
+   (`src/shared/paths.ts:44`) and `claude-mem-${date}.log` with `date` = `toISOString().split('T')[0]`
+   (`src/utils/logger.ts:116`). Note it is **`claude-mem-<date>.log`, not `worker-<date>.log`** — that split has
+   already cost most of a debugging day (queue #17).
+
+   ```bash
+   grep -h "server-fallback" ~/.claude-mem/logs/claude-mem-*.log | tail -20
+   ```
+   ```powershell
+   # Windows
+   Select-String -Path "$env:USERPROFILE\.claude-mem\logs\claude-mem-*.log" -Pattern "server-fallback" | Select-Object -Last 20
+   ```
+
+   **No `[server-fallback]` line at all** (and `CLAUDE_MEM_RUNTIME` unset) → you are in case 1, the silent path.
+   If `CLAUDE_MEM_DATA_DIR` is set on the client, the logs follow it instead of `~/.claude-mem`.
 
 > The "zero WARN/ERROR in 11 days" evidence is from the **NAS**. A `[server-fallback]` warning appears on the
 > **client**. NAS logs cannot rule this out — look on the client.
