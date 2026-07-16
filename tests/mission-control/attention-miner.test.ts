@@ -14,14 +14,22 @@ function freshDb(): Database {
   return db;
 }
 
-function seedErrorObservation(db: Database): void {
+// Seed an error observation stamped at `epoch` so tests can place it inside or
+// outside the miner's 7-day escalation window relative to a fixed `now` — never
+// relying on the literal wall-clock date being within the window.
+function seedErrorObservation(db: Database, epoch: number): void {
   const insert = db.prepare(
     `INSERT INTO observations (memory_session_id, project, type, agent_type, agent_id, created_at, created_at_epoch, narrative, title)
      VALUES (?, ?, 'discovery', NULL, NULL, ?, ?, ?, ?)`
   );
-  insert.run('s1', 'proj', '2026-07-16T00:00:00.000Z', Date.parse('2026-07-16T00:00:00.000Z'),
+  insert.run('s1', 'proj', new Date(epoch).toISOString(), epoch,
     'The worker is unreachable: EADDRINUSE on 127.0.0.1:37777', 'Worker down');
 }
+
+// A fixed reference time used across tests. The escalation window is [now-7d, now],
+// so an observation seeded at NOW is always in-window regardless of the real clock.
+const NOW = Date.parse('2026-07-16T00:00:00.000Z');
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const SPEC = {
   path: 'docs/superpowers/specs/2026-07-16-example-design.md',
@@ -31,12 +39,12 @@ const SPEC = {
 describe('runAttentionMine', () => {
   it('mines open PRs, proposed specs, error observations, and open questions', () => {
     const db = freshDb();
-    seedErrorObservation(db);
+    seedErrorObservation(db, NOW);
     const boundary = {
       ghAvailable: () => true,
       listOpenPrs: (): OpenPr[] => [{ number: 42, title: 'Add feature', url: 'https://x/42' }],
     };
-    const result = runAttentionMine(db, boundary, { specFiles: [SPEC] });
+    const result = runAttentionMine(db, boundary, { specFiles: [SPEC], now: NOW });
     expect(result.ghAvailable).toBe(true);
     const items = readOpenAttentionItems(db);
     expect(items.some(i => i.type === 'review' && i.ref === 'pr:42')).toBe(true);
@@ -75,15 +83,32 @@ describe('runAttentionMine', () => {
 
   it('degrades gracefully when gh is unavailable (specs/errors still mined)', () => {
     const db = freshDb();
-    seedErrorObservation(db);
+    seedErrorObservation(db, NOW);
     const boundary = {
       ghAvailable: () => false,
       listOpenPrs: (): OpenPr[] => [],
     };
-    const result = runAttentionMine(db, boundary, { specFiles: [SPEC] });
+    const result = runAttentionMine(db, boundary, { specFiles: [SPEC], now: NOW });
     expect(result.ghAvailable).toBe(false);
     const items = readOpenAttentionItems(db);
     expect(items.some(i => i.ref.startsWith('spec:'))).toBe(true);
     expect(items.some(i => i.type === 'escalation')).toBe(true);
+  });
+
+  it('auto-resolves an escalation once its error signature leaves the recent window', () => {
+    const db = freshDb();
+    const boundary = { ghAvailable: () => true, listOpenPrs: (): OpenPr[] => [] };
+
+    // Pass 1: the error observation is inside the window → escalation is raised.
+    seedErrorObservation(db, NOW);
+    runAttentionMine(db, boundary, { now: NOW });
+    expect(readOpenAttentionItems(db).some(i => i.type === 'escalation')).toBe(true);
+
+    // Pass 2: run 8 days later. The observation (stamped at NOW) now falls outside
+    // the 7-day window, so its signature is absent from the scan → auto-resolve.
+    const later = NOW + 8 * DAY_MS;
+    const result = runAttentionMine(db, boundary, { now: later });
+    expect(result.resolved).toBeGreaterThanOrEqual(1);
+    expect(readOpenAttentionItems(db).some(i => i.type === 'escalation')).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ export interface ShellResult {
 
 export function runCommand(cmd: string[]): ShellResult {
   try {
-    const result = Bun.spawnSync({ cmd, stdout: 'pipe', stderr: 'pipe' });
+    const result = Bun.spawnSync({ cmd, stdout: 'pipe', stderr: 'pipe', timeout: 5000 });
     return {
       stdout: new TextDecoder().decode(result.stdout).trim(),
       stderr: new TextDecoder().decode(result.stderr).trim(),

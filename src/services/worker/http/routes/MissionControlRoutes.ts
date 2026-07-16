@@ -18,10 +18,26 @@ export class MissionControlRoutes extends BaseRouteHandler {
   private boundary: GitGhBoundary;
   private lastMineAt = 0;
   private readonly minMineIntervalMs = 60_000;
+  private ghAvailableCache: boolean | null = null;
+  private ghAvailableCachedAt = 0;
 
   constructor(private dbManager: DatabaseManager, boundary?: GitGhBoundary) {
     super();
     this.boundary = boundary ?? createGitGhBoundary();
+  }
+
+  /**
+   * Memoized `ghAvailable` probe. `boundary.ghAvailable()` runs a networked
+   * `gh auth status`; calling it on every request would let a slow/hung spawn
+   * block the single-threaded worker. Recompute at most once per 60s.
+   */
+  private cachedGhAvailable(): boolean {
+    if (this.ghAvailableCache !== null && Date.now() - this.ghAvailableCachedAt < 60_000) {
+      return this.ghAvailableCache;
+    }
+    this.ghAvailableCache = this.boundary.ghAvailable();
+    this.ghAvailableCachedAt = Date.now();
+    return this.ghAvailableCache;
   }
 
   setupRoutes(app: express.Application): void {
@@ -53,7 +69,7 @@ export class MissionControlRoutes extends BaseRouteHandler {
     const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
     this.mineOnce(refresh);
     const db = this.dbManager.getSessionStore().db;
-    res.json({ items: readOpenAttentionItems(db, project), ghAvailable: this.boundary.ghAvailable() });
+    res.json({ items: readOpenAttentionItems(db, project), ghAvailable: this.cachedGhAvailable() });
   });
 
   private handleProgress = this.wrapHandler((req: Request, res: Response): void => {

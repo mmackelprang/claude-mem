@@ -20,6 +20,9 @@ export interface MineResult {
   ghAvailable: boolean;
 }
 
+/** Only scan observations from the last 7 days for escalation signatures. */
+const ESCALATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Error-signature patterns that qualify an observation as an escalation. */
 const ERROR_PATTERNS: { key: string; re: RegExp }[] = [
   { key: 'worker-unreachable', re: /worker (is )?unreachable/i },
@@ -102,15 +105,20 @@ export function runAttentionMine(
   resolved += resolvePrefixed(db, 'question', 'question:', liveQuestionRefs, now);
 
   // --- Escalations: error observations ---
+  // Bound the scan to the recent window and cap rows — the observations table is
+  // unbounded and on the hot path. Recency also drives self-resolution below.
   const errorRows = db
     .prepare(`SELECT id, project, narrative, title FROM observations
-              WHERE narrative IS NOT NULL OR title IS NOT NULL`)
-    .all() as { id: number; project: string | null; narrative: string | null; title: string | null }[];
+              WHERE (narrative IS NOT NULL OR title IS NOT NULL) AND created_at_epoch >= ?
+              ORDER BY created_at_epoch DESC LIMIT 500`)
+    .all(now - ESCALATION_WINDOW_MS) as { id: number; project: string | null; narrative: string | null; title: string | null }[];
+  const liveErrorRefs = new Set<string>();
   for (const row of errorRows) {
     const haystack = `${row.title ?? ''}\n${row.narrative ?? ''}`;
     for (const pattern of ERROR_PATTERNS) {
       if (pattern.re.test(haystack)) {
         const ref = `error:${pattern.key}`;
+        liveErrorRefs.add(ref);
         if (upsertMinedItem(db, {
           type: 'escalation',
           summary: `Error signature detected: ${pattern.key}`,
@@ -124,6 +132,10 @@ export function runAttentionMine(
       }
     }
   }
+  // Self-clean (D7): an escalation whose error signature no longer appears in the
+  // recent window auto-resolves (resolved_by='auto'), so a signature that merely
+  // surfaced in an old analysis narrative doesn't become a permanent escalation.
+  resolved += resolvePrefixed(db, 'escalation', 'error:', liveErrorRefs, now);
 
   return { upserted, resolved, ghAvailable };
 }

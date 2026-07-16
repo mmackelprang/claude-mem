@@ -67,6 +67,9 @@ export function parseBuilderQueue(markdown: string): ParsedQueue {
   const shippedRows: QueueRow[] = [];
   const tombstones: number[] = [];
   let sawHeading = false;
+  let sawQueueHeading = false;
+  let sawBacklogHeading = false;
+  let sawShippedHeading = false;
   let section: SectionKind = 'other';
 
   for (const line of lines) {
@@ -74,6 +77,9 @@ export function parseBuilderQueue(markdown: string): ParsedQueue {
     if (headingMatch) {
       sawHeading = true;
       section = classifyHeading(headingMatch[1].trim());
+      if (section === 'queue') sawQueueHeading = true;
+      else if (section === 'backlog') sawBacklogHeading = true;
+      else if (section === 'shipped') sawShippedHeading = true;
       continue;
     }
 
@@ -118,6 +124,27 @@ export function parseBuilderQueue(markdown: string): ParsedQueue {
   }
   if (!sawHeading) {
     throw new BuilderQueueParseError('no `## Queue` / `## Backlog` / `## Recently shipped` headings found');
+  }
+
+  // LOUD per-section drift guards: a single heading rename (e.g. `## Queue` ->
+  // `## Active Queue`) silently drops that section's rows while the whole-doc
+  // total stays > 0, so the checks above never fire. Guard the mandatory,
+  // always-populated sections (Queue and Recently shipped) individually. Backlog
+  // may legitimately be empty, so it is intentionally not guarded here.
+  if (!sawQueueHeading) {
+    throw new BuilderQueueParseError('no recognizable "## Queue" section heading found — the heading text may have drifted');
+  }
+  if (sawQueueHeading && queueRows.length === 0) {
+    throw new BuilderQueueParseError('the Queue section heading was found but no queue rows were extracted — the table format may have drifted');
+  }
+  // The Recently-shipped section is always populated in practice, so a missing
+  // heading means it drifted (e.g. `## Recently shipped` -> `## Recently Merged`)
+  // and its rows were silently dropped. Guard both the rename and the row loss.
+  if (!sawShippedHeading) {
+    throw new BuilderQueueParseError('no recognizable "## Recently shipped" section heading found — the heading text may have drifted');
+  }
+  if (sawShippedHeading && shippedRows.length === 0) {
+    throw new BuilderQueueParseError('the "## Recently shipped" section heading was found but no shipped rows were extracted — the section may have drifted');
   }
 
   return { queueRows, backlogRows, shippedRows, tombstones, openRows };

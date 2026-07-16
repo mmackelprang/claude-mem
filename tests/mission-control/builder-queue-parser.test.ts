@@ -54,4 +54,17 @@ describe('parseBuilderQueue', () => {
   it('throws loudly on empty input', () => {
     expect(() => parseBuilderQueue('')).toThrow(BuilderQueueParseError);
   });
+
+  it('throws loudly when the "## Queue" heading drifts (renamed), even though other sections still have rows', () => {
+    // Rename `## Queue` -> `## Active Queue`. The Queue rows are silently dropped
+    // while Backlog + Shipped keep the whole-doc total > 0, so only a per-section
+    // guard catches this.
+    const drifted = FIXTURE.replace('## Queue', '## Active Queue');
+    expect(() => parseBuilderQueue(drifted)).toThrow(BuilderQueueParseError);
+  });
+
+  it('throws loudly when the "## Recently shipped" heading drifts (renamed)', () => {
+    const drifted = FIXTURE.replace('## Recently shipped', '## Recently Merged');
+    expect(() => parseBuilderQueue(drifted)).toThrow(BuilderQueueParseError);
+  });
 });
