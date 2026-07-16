@@ -7,9 +7,36 @@ export interface AttentionItem {
   urgency: string; source: string; ref: string; status: string; project: string | null; createdAtEpoch: number;
 }
 export interface ProgressBucket {
-  agentType: string | null; agentId: string | null; bucket: string; total: number; byType: Record<string, number>;
+  project: string | null; agentType: string | null; agentId: string | null; bucket: string; total: number; byType: Record<string, number>;
 }
 export interface NextStepItem { memorySessionId: string; project: string; createdAtEpoch: number; text: string; }
+
+export interface VelocityResult {
+  deferred?: boolean; reason?: string; error?: string;
+  openCount: number | null; shippedCount: number | null;
+  shippedByWeek: { week: string; shipped: number }[];
+}
+export interface EscalationContext {
+  key: string; whatTitle: string; fixText: string; fixCommand?: string; docHref: string;
+  errorLine: string; count: number; latestEpoch: number;
+  latestProject: string | null; latestAgentType: string | null; latestSessionId: string | null; otherTeamsCount: number;
+}
+export interface TeamSessions { project: string | null; agentType: string | null; sessions: number; }
+export interface TeamPrs { project: string | null; agentType: string | null; prNumbers: number[]; }
+
+export type ProgressRange = 'since-last-opened' | 'today' | '7d' | 'all';
+const LAST_OPENED_KEY = 'mc-progress-last-opened';
+
+/** Resolve a range to a sinceEpoch (or undefined = all history). */
+function rangeToSince(range: ProgressRange, lastOpened: number | null): number | undefined {
+  const now = Date.now();
+  switch (range) {
+    case 'all': return undefined;
+    case 'today': { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
+    case '7d': return now - 7 * 24 * 60 * 60 * 1000;
+    case 'since-last-opened': return lastOpened ?? now - 7 * 24 * 60 * 60 * 1000; // fallback 7d on first ever open
+  }
+}
 
 export interface MissionControlData {
   attention: AttentionItem[];
@@ -18,8 +45,16 @@ export interface MissionControlData {
   // (repo-root resolution deferred to Backlog #24). Escalations + open-PR reviews
   // still populate the Attention pane; velocity is a deferred 4th pane (#24).
   specMiningDeferred: boolean;
+  repoWebBase: string | null;
+  defaultBranch: string | null;
+  escalationContext: Record<string, EscalationContext>;
   progress: ProgressBucket[];
+  progressSessions: TeamSessions[];
+  progressPrs: TeamPrs[];
+  velocity: VelocityResult | null;
   nextSteps: NextStepItem[];
+  range: ProgressRange;
+  setRange: (r: ProgressRange) => void;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -34,31 +69,59 @@ export function useMissionControl(): MissionControlData {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const [velocity, setVelocity] = useState<VelocityResult | null>(null);
+  const [repoWebBase, setRepoWebBase] = useState<string | null>(null);
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
+  const [escalationContext, setEscalationContext] = useState<Record<string, EscalationContext>>({});
+  const [progressSessions, setProgressSessions] = useState<TeamSessions[]>([]);
+  const [progressPrs, setProgressPrs] = useState<TeamPrs[]>([]);
+  const [range, setRange] = useState<ProgressRange>('since-last-opened');
+
+  const [lastOpened] = useState<number | null>(() => {
     try {
-      // Phase 1 ships 3 panes — Attention (SQLite escalations + gh PR reviews),
-      // Progress (SQLite), Next-steps (SQLite). Velocity is deferred to #24, so it
-      // is not fetched here (its route stays registered, gated, for #24).
-      const [a, p, n] = await Promise.all([
+      const raw = localStorage.getItem(LAST_OPENED_KEY);
+      const prev = raw ? Number(raw) : null;
+      localStorage.setItem(LAST_OPENED_KEY, String(Date.now())); // advance for next visit
+      return prev && Number.isFinite(prev) ? prev : null;
+    } catch { return null; }
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const since = rangeToSince(range, lastOpened);
+      const progressUrl = since === undefined
+        ? API_ENDPOINTS.MC_PROGRESS
+        : `${API_ENDPOINTS.MC_PROGRESS}?since=${since}`;
+      const [a, p, v, n] = await Promise.all([
         fetch(API_ENDPOINTS.MC_ATTENTION).then(r => r.json()),
-        fetch(API_ENDPOINTS.MC_PROGRESS).then(r => r.json()),
+        fetch(progressUrl).then(r => r.json()),
+        fetch(API_ENDPOINTS.MC_VELOCITY).then(r => r.json()),
         fetch(API_ENDPOINTS.MC_NEXT_STEPS).then(r => r.json()),
       ]);
       setAttention(a.items ?? []);
       setGhAvailable(a.ghAvailable ?? true);
       setSpecMiningDeferred(a.specMiningDeferred ?? false);
+      setRepoWebBase(a.repoWebBase ?? null);
+      setDefaultBranch(a.defaultBranch ?? null);
+      setEscalationContext(a.escalationContext ?? {});
       setProgress(p.buckets ?? []);
+      setProgressSessions(p.sessions ?? []);
+      setProgressPrs(p.prs ?? []);
+      setVelocity(v ?? null);
       setNextSteps(n.items ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [range, lastOpened]);
 
   useEffect(() => { load(); }, [load]);
 
-  return { attention, ghAvailable, specMiningDeferred, progress, nextSteps, loading, error, refresh: load };
+  return {
+    attention, ghAvailable, specMiningDeferred, repoWebBase, defaultBranch, escalationContext,
+    progress, progressSessions, progressPrs, velocity, nextSteps,
+    range, setRange, loading, error, refresh: load,
+  };
 }

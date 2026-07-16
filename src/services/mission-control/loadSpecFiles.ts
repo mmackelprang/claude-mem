@@ -25,12 +25,12 @@ function walkMarkdown(dir: string): string[] {
  * Read spec + ADR markdown off disk for the miner. Best-effort: unreadable files
  * are skipped.
  *
- * DEFERRED (#24): repo-root resolution is gated off in Phase 1, so this returns
- * `[]` — spec-review + doc-question mining are a clean no-op until #24 lands a
- * project-root strategy. No dangling `getPackageRoot()`-for-repo-files call.
+ * Phase 1b (#24) re-enabled this: repo-root resolution now runs, so when
+ * `resolveRepoRoot()` returns a validated root the spec/ADR files are read for
+ * spec-review + doc-question mining. When the root is unresolved (`null`) this
+ * still returns `[]` — a clean no-op that degrades to the deferred state.
  */
-export function loadSpecFiles(): { path: string; content: string }[] {
-  const root = resolveRepoRoot();
+export function loadSpecFiles(root: string | null = resolveRepoRoot()): { path: string; content: string }[] {
   if (root === null) return [];
   const files: { path: string; content: string }[] = [];
   for (const rel of SPEC_DIRS) {

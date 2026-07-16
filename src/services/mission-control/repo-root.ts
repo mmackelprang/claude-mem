@@ -1,26 +1,75 @@
-// src/services/mission-control/repo-root.ts
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
+import { runCommand } from './shell.js';
+import { USER_SETTINGS_PATH } from '../../shared/paths.js';
+import { parseJsonWithBom } from '../../shared/atomic-json.js';
+import { logger } from '../../utils/logger.js';
 
 /**
- * Resolve the repository root for Mission Control's filesystem-backed sources:
- *   - velocity  → docs/BUILDER_QUEUE.md
- *   - reviews   → docs/superpowers/specs/** (Proposed-spec mining)
- *   - questions → docs/**                   (doc Open-Questions mining)
+ * Resolve the Mission Control repository root for the filesystem- and git-backed
+ * sources (velocity → docs/BUILDER_QUEUE.md + git merge series; reviews →
+ * docs/superpowers/specs/** + gh pr list; questions → docs/** Open-Questions).
  *
- * DEFERRED — Backlog #24. `getPackageRoot()` returns the plugin *install* root
- * (where `plugin/` is deployed), which does NOT ship `docs/`. Reading repo docs
- * through it silently resolves the wrong tree on a deployed global worker, so we
- * gate those three sources OFF here rather than leave a dangling
- * `getPackageRoot()`-for-repo-files call. Returning `null` puts velocity in a
- * clearly-labeled "deferred" state and makes spec/doc mining a no-op (empty
- * specFiles), while the SQLite + `gh` panes ship in Phase 1.
- *
- * #24 will pick a resolution strategy (env `CLAUDE_MEM_PROJECT_ROOT` vs cwd/git
- * auto-detect vs dev-only) and implement it here — a one-function change that
- * RE-ENABLES velocity + spec/doc mining without rewriting the miner, the
- * queries, or the routes.
+ * Strategy (#24): env CLAUDE_MEM_PROJECT_ROOT → settings.json key →
+ * `git rev-parse --show-toplevel` → null. A candidate validates iff it contains
+ * docs/BUILDER_QUEUE.md (the canonical roadmap file) so a deployed worker whose
+ * cwd is an upstream checkout does NOT false-resolve. A set-but-invalid
+ * env/settings value logs one loud WARN and falls through to null. Memoized.
  */
+function isMissionControlRepo(root: string): boolean {
+  return existsSync(path.join(root, 'docs', 'BUILDER_QUEUE.md'));
+}
+
+function readSettingsProjectRoot(): string | null {
+  try {
+    if (!existsSync(USER_SETTINGS_PATH)) return null;
+    const raw = parseJsonWithBom<Record<string, any>>(readFileSync(USER_SETTINGS_PATH, 'utf-8'));
+    const settings = raw.env ?? raw;
+    const val = settings.CLAUDE_MEM_PROJECT_ROOT;
+    return typeof val === 'string' && val.trim() ? val.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function gitToplevel(): string | null {
+  const result = runCommand(['git', 'rev-parse', '--show-toplevel']);
+  if (result.exitCode !== 0 || !result.stdout) return null;
+  return result.stdout.trim();
+}
+
+function resolve(): string | null {
+  const envRoot = process.env.CLAUDE_MEM_PROJECT_ROOT?.trim();
+  if (envRoot) {
+    if (isMissionControlRepo(envRoot)) return envRoot;
+    logger.warn('WORKER',
+      'CLAUDE_MEM_PROJECT_ROOT is set but does not contain docs/BUILDER_QUEUE.md — Mission Control velocity + spec/doc mining stay deferred',
+      { path: envRoot });
+    return null;
+  }
+  const settingsRoot = readSettingsProjectRoot();
+  if (settingsRoot) {
+    if (isMissionControlRepo(settingsRoot)) return settingsRoot;
+    logger.warn('WORKER',
+      'settings.json CLAUDE_MEM_PROJECT_ROOT does not contain docs/BUILDER_QUEUE.md — Mission Control velocity + spec/doc mining stay deferred',
+      { path: settingsRoot });
+    return null;
+  }
+  const top = gitToplevel();
+  if (top && isMissionControlRepo(top)) return top;
+  return null;
+}
+
+let cache: { root: string | null } | undefined;
+
 export function resolveRepoRoot(): string | null {
-  return null; // Phase 1: deferred to Backlog #24.
+  if (cache === undefined) cache = { root: resolve() };
+  return cache.root;
+}
+
+/** Test-only: clear the memoized resolution so env/settings changes re-resolve. */
+export function resetRepoRootCache(): void {
+  cache = undefined;
 }
 
 /** Human-readable label for a repo-root-gated (deferred) source. */

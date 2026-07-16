@@ -3,6 +3,9 @@ import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { SessionStore } from '../../../../src/services/sqlite/SessionStore.js';
 import { MissionControlRoutes } from '../../../../src/services/worker/http/routes/MissionControlRoutes.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 
 // Minimal Express-like app double: records handlers keyed by path.
 function makeMockApp() {
@@ -68,7 +71,7 @@ describe('MissionControlRoutes', () => {
     const app = makeMockApp();
     const routes = new MissionControlRoutes(makeDbManager() as any, {
       ghAvailable: () => false, listOpenPrs: () => [], listMergeCommits: () => [],
-    });
+    }, null); // repoRoot: null ⇒ deferred, deterministic regardless of the bun-test cwd
     routes.setupRoutes(app as any);
     const body = app.invoke('/api/mission-control/velocity', { query: {} }) as {
       deferred?: boolean; reason?: string; openCount: number | null; shippedByWeek: unknown[];
@@ -83,12 +86,91 @@ describe('MissionControlRoutes', () => {
     const app = makeMockApp();
     const routes = new MissionControlRoutes(makeDbManager() as any, {
       ghAvailable: () => false, listOpenPrs: () => [], listMergeCommits: () => [],
-    });
+    }, null); // repoRoot: null ⇒ deferred, deterministic regardless of the bun-test cwd
     routes.setupRoutes(app as any);
     const body = app.invoke('/api/mission-control/attention', { query: {} }) as {
       items: unknown[]; ghAvailable: boolean; specMiningDeferred: boolean;
     };
     expect(Array.isArray(body.items)).toBe(true);
     expect(body.specMiningDeferred).toBe(true); // gated off in Phase 1 (#24)
+  });
+});
+
+const FIXTURE_QUEUE = `# Builder Queue
+
+## Queue
+
+| # | Status | Item | Spec + Plan | Depends on | Notes |
+|---|--------|------|-------------|------------|-------|
+| 1 | 📋 | **First item** | [plan](x.md) | — | note |
+
+## Recently shipped
+
+| Item | PR | Notes |
+|------|----|-------|
+| Something shipped | #99 | note |
+`;
+
+function makeFixtureRepo(): string {
+  const root = mkdtempSync(path.join(tmpdir(), 'mc-route-'));
+  mkdirSync(path.join(root, 'docs'), { recursive: true });
+  writeFileSync(path.join(root, 'docs', 'BUILDER_QUEUE.md'), FIXTURE_QUEUE);
+  return root;
+}
+
+const RESOLVED_BOUNDARY = {
+  ghAvailable: () => false,
+  listOpenPrs: () => [],
+  listMergeCommits: () => [],
+  repoWebInfo: () => ({ repoWebBase: 'https://github.com/acme/repo', defaultBranch: 'main' }),
+};
+
+describe('MissionControlRoutes — Phase 1b payloads', () => {
+  it('velocity returns real counts (not deferred), independent of an empty git series (F3)', () => {
+    const root = makeFixtureRepo();
+    try {
+      const app = makeMockApp();
+      const routes = new MissionControlRoutes(makeDbManager() as any, RESOLVED_BOUNDARY, root);
+      routes.setupRoutes(app as any);
+      const body = app.invoke('/api/mission-control/velocity', { query: {} }) as {
+        deferred?: boolean; openCount: number | null; shippedCount: number | null; shippedByWeek: unknown[];
+      };
+      expect(body.deferred).toBeUndefined();
+      expect(body.openCount).toBe(1);
+      expect(body.shippedCount).toBe(1);
+      expect(body.shippedByWeek).toEqual([]); // empty git ⇒ empty series, counts survive
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('attention exposes link base + escalationContext and specMiningDeferred:false when resolved', () => {
+    const root = makeFixtureRepo();
+    try {
+      const app = makeMockApp();
+      const routes = new MissionControlRoutes(makeDbManager() as any, RESOLVED_BOUNDARY, root);
+      routes.setupRoutes(app as any);
+      const body = app.invoke('/api/mission-control/attention', { query: {} }) as {
+        specMiningDeferred: boolean; repoWebBase: string | null; defaultBranch: string | null; escalationContext: Record<string, unknown>;
+      };
+      expect(body.specMiningDeferred).toBe(false);
+      expect(body.repoWebBase).toBe('https://github.com/acme/repo');
+      expect(body.defaultBranch).toBe('main');
+      expect(typeof body.escalationContext).toBe('object');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('progress returns buckets + sessions + prs and honors ?since', () => {
+    const dbManager = makeDbManager();
+    const db = dbManager.getSessionStore().db;
+    db.run(`INSERT INTO observations (memory_session_id, project, text, type, title, agent_type, created_at, created_at_epoch)
+            VALUES ('s1','claude-mem','opened PR #42','feature','opened PR #42','builder','2026-07-16T00:00:00.000Z', 5000)`);
+    const app = makeMockApp();
+    const routes = new MissionControlRoutes(dbManager as any, RESOLVED_BOUNDARY, null);
+    routes.setupRoutes(app as any);
+    const body = app.invoke('/api/mission-control/progress', { query: { since: '4000' } }) as {
+      buckets: Array<{ project: string | null }>; sessions: Array<{ sessions: number }>; prs: Array<{ prNumbers: number[] }>;
+    };
+    expect(body.buckets.some(b => b.project === 'claude-mem')).toBe(true);
+    expect(body.sessions.some(s => s.sessions === 1)).toBe(true);
+    expect(body.prs.some(p => p.prNumbers.includes(42))).toBe(true);
   });
 });
