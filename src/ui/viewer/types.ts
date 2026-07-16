@@ -91,4 +91,7 @@ export interface Settings {
 
   CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY?: string;
   CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE?: string;
+
+  CLAUDE_MEM_CONNECTIONS?: string;         // JSON-stringified ConnectionProfile[]
+  CLAUDE_MEM_ACTIVE_CONNECTION?: string;
 }

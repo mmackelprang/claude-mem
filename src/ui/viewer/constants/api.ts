@@ -8,4 +8,8 @@ export const API_ENDPOINTS = {
   MC_PROGRESS: '/api/mission-control/progress',
   MC_VELOCITY: '/api/mission-control/velocity',
   MC_NEXT_STEPS: '/api/mission-control/next-steps',
+  RUNTIME_ROLE: '/api/runtime-role',
+  CONNECTION_TEST: '/api/connection/test',
+  SERVER_CONFIG: '/api/server-config',
+  INGEST_STATUS: '/api/ingest-status',
 } as const;
