@@ -1,14 +1,37 @@
 # Setup — claude-mem server app on `nas.lan`
 
-**Audience:** whoever is standing up, re-configuring, or debugging the claude-mem server stack on the NAS, and anyone pointing a client at it.
+**Audience:** whoever is configuring, repairing, or debugging the claude-mem server stack on the NAS, and anyone pointing a client at it.
 **Status:** current as of 2026-07-15. **Fork-only** — this is pilot infrastructure, not an upstream feature.
 **Scope:** prerequisites → deploy → configure → mint keys → point a client → verify ingest → troubleshoot.
 
-> **Read this first.** The stack has been "green" while capturing **nothing** for 11 days. Every health probe
-> returned 200 the whole time. The three things that make or break a working install are in
-> [§4 Configure](#4-configure-the-stack), [§5 Mint keys](#5-mint-api-keys), and [§6 Point a client](#6-point-a-client-at-the-server) —
-> and the only step that proves any of it worked is [§7 Verify ingest for real](#7-verify-ingest-for-real).
-> **Do not treat a 200 from `/healthz` as evidence of anything.** See [§8 Troubleshooting](#8-troubleshooting).
+> ### Start here — what this document is, and is not
+>
+> **The stack is already deployed on the NAS.** It is running right now, and every health probe has returned 200 for
+> 11 days — while capturing **nothing**. So the job in front of you is almost certainly **configure + verify**, not
+> deploy.
+>
+> - **You are configuring/repairing the existing app** → this document is self-contained. Go to
+>   [§4](#4-configure-the-stack) → [§6](#6-point-a-client-at-the-server) → [§7](#7-verify-ingest-for-real).
+> - **You are standing up a brand-new stack from scratch** → this document is **not sufficient on its own**.
+>   [§3](#3-deploy) hands you to the pilot runbook for the TrueNAS app-creation steps, which are not reproduced here.
+>   Read [§3](#3-deploy)'s gap notice before you start.
+>
+> **Execution order — the section numbers are not the running order.** Generation is downstream of ingest, and ingest
+> is what is broken, so:
+>
+> **[§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it) → [§5](#5-mint-api-keys) → [§6](#6-point-a-client-at-the-server) → [§7.1–7.3](#7-verify-ingest-for-real) (prove ingest) → [§4.1–4.2](#41-set-claude_mem_server_model--or-silently-pay-3) (model + generation) → [§7.4](#74-confirm-an-observation-actually-lands) (prove generation).**
+>
+> Doing §4.2 first is not wrong, just useless on its own: an enabled provider sits idle on an empty queue until a
+> client actually reaches the box.
+>
+> **Two config surfaces — do not cross the streams:**
+>
+> | Side | Where config lives | Set via |
+> |---|---|---|
+> | **Server** (the NAS app) | **environment variables** in the app's compose | [§4](#4-configure-the-stack) — env only; the server **never** reads `settings.json` |
+> | **Client** (a teammate's machine) | **`~/.claude-mem/settings.json`** | [§6](#6-point-a-client-at-the-server) — settings file only; **env vars do nothing** |
+>
+> **Do not treat a 200 from `/healthz` as evidence of anything.** See [§8.1](#81-health-checks-lie).
 
 ---
 
@@ -95,11 +118,24 @@ modeled on the repo's `docker-compose.yml`.
 
 1. **Regenerate the server bundle before deploying.** A source-only merge leaves `plugin/scripts/server-service.cjs`
    stale and ships the wrong schema version. This has happened: the pilot once shipped at schema v1 after a merge
-   reverted the bundle rebuild. ADR 0002 §4.1 makes this a **gate, not a chore** — it cites
+   reverted the bundle rebuild. [ADR 0002](../architecture/decisions/2026-07-14-upstream-v13.11.0-fork-merge.md) §4.1
+   makes this a **gate, not a chore** — it cites
    [`2026-07-03-nas-tailscale-pilot-runbook.md:49`](./2026-07-03-nas-tailscale-pilot-runbook.md) as the precedent and calls it
    *"the single most likely way to ship a broken pilot."*
-2. **Take a Postgres volume snapshot before any redeploy.** Required by ADR 0002 §7.2. The pilot carries real (if
+
+   ```bash
+   npm run build     # regenerates plugin/scripts/*.cjs, incl. server-service.cjs
+   ```
+
+   The image `COPY plugin/ /opt/claude-mem/` (`docker/claude-mem/Dockerfile:41`), so the bundle must be rebuilt
+   **before** the image is built — otherwise the image carries a stale bundle. Use `npm run build`, **not**
+   `build-and-sync`: the latter also restarts your *local* worker, which has nothing to do with the NAS.
+2. **Take a Postgres volume snapshot before any redeploy.** Required by
+   [ADR 0002](../architecture/decisions/2026-07-14-upstream-v13.11.0-fork-merge.md) §7.2. The pilot carries real (if
    sparse) rows and an in-place schema migration history (v1 → v2 → v3).
+   > **Verify on the box:** the exact dataset path and snapshot command are **not recorded anywhere in this repo**.
+   > Take it via TrueNAS (Storage → Snapshots) or `zfs snapshot <pool>/<dataset>@<name>` against the app's Postgres
+   > dataset — **identify the real dataset on the NAS first.** Do not guess a path from this document.
 
 **Tailscale:** use a **pre-auth key**, not the interactive login flow. The interactive flow **does not work here** — the
 container's health check restarted it 29× before any login URL could be clicked, minting a fresh URL each cycle. The
@@ -110,6 +146,31 @@ pre-auth key brought the node online immediately and restarts went `29 → 0`.
 ## 4. Configure the stack
 
 This is where installs silently break. Three settings decide whether you get a working, affordable install.
+
+### 4.0 How to apply a config change (do this first — the rest of §4 assumes it)
+
+Every §4 change is an **environment variable on a service in the `claude-mem` custom app's compose**. The YAML snippets
+below are fragments to merge into the relevant service's `environment:` block — they are not standalone files.
+
+The app is a **TrueNAS custom app**, so its compose is edited through TrueNAS, not through this repo:
+
+> **TrueNAS UI:** Apps → **`claude-mem`** → **Edit** → the custom-app YAML → apply the change → **Update/Save**.
+> TrueNAS redeploys the affected containers.
+
+> ⚠️ **Verify this path on the box before relying on it.** The exact UI wording varies by SCALE version, and **this
+> step was not executed while writing this document**. What *is* recorded: the pilot changed live app config
+> programmatically via **`app.update`** (that is how the Tailscale `auth_key` was set — see the pilot runbook), so a
+> `midclt call app.update ...` route exists if the UI is awkward. **Editing the repo's `docker-compose.yml` does
+> nothing to the NAS** — that file is a reference, not the deployed artifact ([§3](#3-deploy)).
+
+**After any change, confirm it actually landed in the container** — do not assume the redeploy took:
+
+```bash
+sudo docker inspect <worker-container> --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'CLAUDE_MEM_SERVER_MODEL|CLAUDE_MEM_SERVER_PROVIDER|ANTHROPIC_API_KEY'
+```
+
+(That prints the key's *presence*; it also prints its value — run it where nobody is looking over your shoulder, and
+never paste the output into a ticket.)
 
 ### 4.1 Set `CLAUDE_MEM_SERVER_MODEL` — or silently pay 3×
 
@@ -198,10 +259,21 @@ ssh claude@192.168.86.47
 sudo docker exec ix-claude-mem-claude-mem-server-1 \
   bun /opt/claude-mem/scripts/server-service.cjs \
   server api-key create --name <teammate> --actor <teammate> --scope memories:read,memories:write
-
-# Consume-only (read):
-#   --scope memories:read
 ```
+
+```bash
+# Consume-only (read) — the full command, not a variant to assemble:
+sudo docker exec ix-claude-mem-claude-mem-server-1 \
+  bun /opt/claude-mem/scripts/server-service.cjs \
+  server api-key create --name <teammate> --actor <teammate> --scope memories:read
+```
+
+> **On the script name** (you may see a contradiction elsewhere — it is resolved): the script is
+> **`server-service.cjs`**. `docker-compose.yml:16-17`'s header comment says `server-beta-service.cjs`; **that comment
+> is stale** — no such file exists anywhere in the repo, a casualty of the `server-beta` → `server` rename. Verified:
+> `plugin/scripts/server-service.cjs` exists, and `Dockerfile:41` does `COPY plugin/ /opt/claude-mem/`, which puts it at
+> exactly `/opt/claude-mem/scripts/server-service.cjs` — matching the path the runbooks record as actually run.
+> If it still errors, list the real contents: `sudo docker exec ix-claude-mem-claude-mem-server-1 ls /opt/claude-mem/scripts/`.
 
 The command prints JSON containing **`key`**, **`projectId`**, `teamId`, `scopes`, and `actorId`
 (`ServerService.ts:546-554`). **Keep `key` and `projectId`** — you need both in [§6](#6-point-a-client-at-the-server).
@@ -230,7 +302,11 @@ Audit existing keys (metadata only, no secrets): `... server api-key list --acti
 
 ### The four keys — all of them, in `settings.json`, not env vars
 
-Edit **`~/.claude-mem/settings.json`** on the *client* machine:
+Edit **`~/.claude-mem/settings.json`** on the *client* machine.
+
+> ⚠️ **Merge these four keys into the existing file — do not replace it.** The file very likely already holds other
+> settings (the flat top-level shape is the modern format). Pasting the block below over the whole file clobbers them.
+> If the file does not exist yet, create it with exactly this content.
 
 ```jsonc
 {
@@ -252,8 +328,13 @@ Edit **`~/.claude-mem/settings.json`** on the *client* machine:
 > Do **not** assume the tooling did this. The only `chmod 0600` on `settings.json` lives in `persistServerSettings()`
 > (`server-bootstrap.ts:171`) — reachable **only** via the bootstrap path that, as shown below, **never runs on a
 > teammate machine**. The writer that actually runs (`mergeSettings` → `writeJsonFileAtomic`) creates a new file under
-> the **process umask** (`atomic-json.ts:77-86`), i.e. typically **`0644` — world-readable**. On Windows, set the
-> equivalent ACL.
+> the **process umask** (`atomic-json.ts:77-86`), i.e. typically **`0644` — world-readable**.
+>
+> **On Windows**, break inheritance and grant only yourself:
+>
+> ```powershell
+> icacls "$env:USERPROFILE\.claude-mem\settings.json" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+> ```
 
 **Miss any one of the four → silent fallback to local worker mode.** The client keeps working, captures to its own
 local SQLite, and reports nothing wrong. That is the failure, and it is not loud.
@@ -264,9 +345,9 @@ local SQLite, and reports nothing wrong. That is the failure, and it is not loud
   this document.
 - ❗ **There are FOUR keys.** The onboarding runbook lists **three** — it **omits `CLAUDE_MEM_SERVER_PROJECT_ID`**,
   which `buildServerContext()` requires (`runtime-selector.ts:48-86`; the `projectId` guard is at `:83-86`). A client following that doc lands in exactly the
-  silent-fallback state. For corroboration, `SERVER_RUNTIME_SETTINGS_KEYS`
-  (`src/npx-cli/commands/server-runtime-setup.ts:22-30`) lists these four as the keys an uninstall tears down — note it
-  holds **seven** entries: the four canonical keys plus three legacy `*_BETA_*` aliases, not seven distinct settings.
+  silent-fallback state. **Four keys — that is the whole set.** (Corroboration: `SERVER_RUNTIME_SETTINGS_KEYS`,
+  `src/npx-cli/commands/server-runtime-setup.ts:22-30`, is the uninstall teardown list. It contains these same four
+  plus three deprecated `*_BETA_*` aliases of them — read as seven lines, it is still four settings.)
 - Legacy `CLAUDE_MEM_SERVER_BETA_*` names are still accepted as fallbacks; `CLAUDE_MEM_RUNTIME` accepts the legacy
   value `server-beta` as well as `server`.
 
@@ -304,9 +385,19 @@ sudo docker exec <postgres-container> \
 ```
 
 > **Verify on the box:** the exact postgres container name and the `POSTGRES_USER`/`POSTGRES_DB` values were generated
-> on-NAS and are **not** in this repo. Read the container name off `docker ps` and the credentials off the app's
-> configuration. Do not guess. (If the query errors with *relation does not exist*, check the schema/`search_path`
-> before concluding the table is missing.)
+> on-NAS and are **not** in this repo. Do not guess them. Read them off the running container:
+>
+> ```bash
+> sudo docker inspect <postgres-container> \
+>   --format '{{range .Config.Env}}{{println .}}{{end}}' | grep POSTGRES_
+> ```
+>
+> That prints `POSTGRES_USER` / `POSTGRES_DB` — **and `POSTGRES_PASSWORD` in plaintext**, so run it privately and never
+> paste the output anywhere. (`psql` inside the container authenticates locally and will not prompt for it.)
+> Alternatively read them from the app's compose via the TrueNAS UI ([§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it)).
+>
+> If the query errors with *relation does not exist*, check the schema / `search_path` before concluding the table is
+> missing — do not conclude the stack is empty.
 
 ### 7.2 Drive a real client session
 
@@ -319,16 +410,23 @@ Re-run the count from [§7.1](#71-baseline-the-event-count-on-the-nas). **`agent
 your baseline.** If it did not move, the client never reached the server → go to [§8.2](#82-silent-runtime-fallback--everything-is-green-but-nothing-is-captured).
 **Do not proceed on a green health check.**
 
+> 🛑 **A moved count means ingest works. It does not mean the setup works — you are not done until
+> [§7.4](#74-confirm-an-observation-actually-lands) passes.** Ingest and generation fail independently, and generation
+> is the half that has never once run on this box. Stopping here is how "it's working" gets said about a stack that
+> produces no observations.
+
 ### 7.4 Confirm an observation actually lands
 
 Ingest working ≠ generation working. These are independent; verify both.
 
-```sql
--- jobs enqueued by ingest:
-SELECT count(*) FROM observation_generation_jobs;
+```bash
+# jobs enqueued by ingest:
+sudo docker exec <postgres-container> \
+  psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c "SELECT count(*) FROM observation_generation_jobs;"
 
--- generated (not hand-written) observations:
-SELECT count(*) FROM observations WHERE created_by_job_id IS NOT NULL;
+# generated (not hand-written) observations:
+sudo docker exec <postgres-container> \
+  psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c "SELECT count(*) FROM observations WHERE created_by_job_id IS NOT NULL;"
 ```
 
 A generated observation has `created_by_job_id` **NOT NULL**. Rows with `kind='manual'` and
@@ -499,10 +597,25 @@ before relying on any of it.**
    ([§8.6](#86-naslan-does-not-resolve), [§8.7](#87-remote-teammate-can-reach-nothing--can-reach-too-much)); queue #16.
 5. **Whether the `observations`/`agent_events` tables live in `public`** — the [§7](#7-verify-ingest-for-real) queries
    assume the default `search_path`. Table *names* are verified from the live box; the schema is not.
-6. **The exact `bun /opt/claude-mem/scripts/server-service.cjs` path inside the container** — taken verbatim from the
-   teammate-onboarding runbook, where it is recorded as actually run. Note the repo's compose header refers to
-   `server-beta-service.cjs`; this naming drift is unreconciled. If the [§5](#5-mint-api-keys) command errors, check the
-   real path in the container.
-7. **No step in this document was executed.** It is assembled from the runbooks (what was actually done), verified
-   in-repo source citations, and read-only findings recorded in the queue. Nothing was run against the NAS.
+6. **How to apply a config change to the live TrueNAS app** ([§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it)) — the UI path is described from
+   TrueNAS convention, **not executed**. The `app.update` route is recorded in the pilot runbook (used for Tailscale's
+   `auth_key`); the Apps-UI YAML edit is not. Confirm before relying on either.
+7. **The Postgres snapshot dataset path and command** ([§3](#3-deploy)) — not recorded anywhere in this repo.
+8. **No step in this document was executed.** It is assembled from the runbooks (what was actually done), verified
+   in-repo source citations, and read-only findings recorded in the queue. **Nothing was run against the NAS.**
+
+**Resolved while writing — previously flagged, now settled (recorded so nobody re-opens it):** the container script is
+**`server-service.cjs`**, not `server-beta-service.cjs`. `docker-compose.yml:16-17`'s comment is **stale** — the latter
+file does not exist in the repo. `plugin/scripts/server-service.cjs` exists and `Dockerfile:41` (`COPY plugin/
+/opt/claude-mem/`) places it at `/opt/claude-mem/scripts/server-service.cjs`, matching the runbooks' recorded command.
+
+### What this document cannot give you
+
+Being straight about it, so you budget for it: this guide is **complete for configure → point a client → verify**
+(§4–§7), which is where this pilot is actually broken. It is **not** a from-scratch TrueNAS deployment runbook — §3
+delegates app creation to the pilot runbook and does not reproduce it. And a handful of values simply **do not exist
+outside the box** (real container names beyond the server's, the deployed compose, the DB credentials, whether the
+Tailscale ACL was applied). Those are marked "verify on the box" everywhere they appear, with the command to discover
+them. That is a deliberate choice: **this document would rather hand you a discovery command than a confident
+fabrication.** Every instruction it *does* state as fact is cited to source you can check.
 </content>
