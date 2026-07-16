@@ -13,6 +13,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { clearPortCache } from '../../../../shared/worker-utils.js';
 import { snapshotDependencyHealth } from '../../../../shared/dependency-health.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from '../../../../shared/atomic-json.js';
+import { ConnectionStore } from '../../ConnectionStore.js';
 
 const toggleMcpSchema = z.object({
   enabled: z.boolean(),
@@ -117,6 +118,11 @@ export class SettingsRoutes extends BaseRouteHandler {
         settings[key] = req.body[key];
       }
     }
+
+    // ConnectionStore is the single owner of canonical-key derivation: seed the
+    // Local worker + reconcile CLAUDE_MEM_RUNTIME/SERVER_* from the active
+    // profile, in-memory, so the file is written once and stays consistent.
+    settings = ConnectionStore.applyToSettings(settings);
 
     writeJsonFileAtomic(settingsPath, settings);
 
