@@ -97,6 +97,7 @@ import { TranscriptWatcher } from './transcripts/watcher.js';
 import { ViewerRoutes } from './worker/http/routes/ViewerRoutes.js';
 import { SessionRoutes } from './worker/http/routes/SessionRoutes.js';
 import { DataRoutes } from './worker/http/routes/DataRoutes.js';
+import { MissionControlRoutes } from './worker/http/routes/MissionControlRoutes.js';
 import { SearchRoutes } from './worker/http/routes/SearchRoutes.js';
 import { SettingsRoutes } from './worker/http/routes/SettingsRoutes.js';
 import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
@@ -217,6 +218,7 @@ export class WorkerService implements WorkerRef {
   private corpusStore: CorpusStore;
 
   private searchRoutes: SearchRoutes | null = null;
+  private missionControlMineTimer: ReturnType<typeof setInterval> | null = null;
 
   private chromaMcpManager: ChromaMcpManager | null = null;
   private transcriptWatcher: TranscriptWatcher | null = null;
@@ -354,6 +356,11 @@ export class WorkerService implements WorkerRef {
       sessionRoutes.ensureGeneratorRunning(sessionDbId, source),
     );
     this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime));
+    const missionControlRoutes = new MissionControlRoutes(this.dbManager);
+    this.server.registerRoutes(missionControlRoutes);
+    // Periodic best-effort mine so the Attention pane self-populates and auto-resolves.
+    this.missionControlMineTimer = setInterval(() => { missionControlRoutes.mineOnce(true); }, 5 * 60_000);
+    if (typeof this.missionControlMineTimer.unref === 'function') this.missionControlMineTimer.unref();
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
@@ -740,6 +747,8 @@ export class WorkerService implements WorkerRef {
       isShuttingDown: () => this.isShuttingDown,
       markShuttingDown: () => { this.isShuttingDown = true; },
       beforeGracefulShutdown: async () => {
+        if (this.missionControlMineTimer) { clearInterval(this.missionControlMineTimer); this.missionControlMineTimer = null; }
+
         if (this.transcriptWatcher) {
           this.transcriptWatcher.stop();
           this.transcriptWatcher = null;
