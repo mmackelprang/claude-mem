@@ -1865,6 +1865,9 @@
     }
 
     .form-field input[type="number"],
+    .form-field input[type="text"],
+    .form-field input[type="password"],
+    .form-field input:not([type]),
     .form-field select {
       width: 100%;
       background: var(--color-bg-input);
@@ -1878,16 +1881,26 @@
     }
 
     .form-field input[type="number"]:hover,
+    .form-field input[type="text"]:hover,
+    .form-field input[type="password"]:hover,
+    .form-field input:not([type]):hover,
     .form-field select:hover {
       border-color: var(--color-border-hover);
     }
 
     .form-field input[type="number"]:focus,
+    .form-field input[type="text"]:focus,
+    .form-field input[type="password"]:focus,
+    .form-field input:not([type]):focus,
     .form-field select:focus {
       outline: none;
       border-color: var(--color-border-focus);
-      box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+      box-shadow: var(--shadow-focus);
     }
+
+    /* Key + reveal-toggle row: the input fills, the button sits beside it
+       (.key-input flex layout is defined in the Connection Profiles block). */
+    .key-input input { flex: 1; min-width: 0; }
 
     /* ============================================
        NEW: Toggle Switches
@@ -2472,7 +2485,7 @@
   background: var(--color-bg-card); border: none; border-bottom: 1px solid var(--color-border-primary); text-align: left; cursor: pointer; }
 .profile-row:last-child { border-bottom: none; }
 .profile-row.focused { background: var(--color-bg-card-hover); }
-.profile-row:focus-visible { box-shadow: 0 0 0 3px rgba(9,105,218,0.1); outline: none; }
+.profile-row:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
 .radio-glyph { color: var(--color-text-muted); }
 .radio-glyph.on { color: var(--color-accent-primary); }
 .profile-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
@@ -2490,7 +2503,7 @@
 .cm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .cm-btn-primary { background: var(--color-accent-primary); border-color: var(--color-accent-primary); color: #fff; }
 .cm-btn-danger { color: var(--color-accent-error); border-color: var(--color-accent-error); }
-.cm-btn:focus-visible, .reveal-toggle:focus-visible { box-shadow: 0 0 0 3px rgba(9,105,218,0.1); outline: none; }
+.cm-btn:focus-visible, .reveal-toggle:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
 .preset-menu { position: relative; }
 .preset-options { position: absolute; z-index: 5; margin-top: 4px; background: var(--color-bg-card);
   border: 1px solid var(--color-border-primary); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 240px; }
@@ -2526,6 +2539,9 @@
 .wizard { display: flex; flex-direction: column; gap: 10px; }
 .current-config { font-size: 12px; color: var(--color-text-primary); background: var(--color-bg-stat); border-radius: 6px; padding: 8px 10px; }
 .ingest-line { margin-top: 4px; }
+.ingest-line.ok { color: var(--color-accent-success); }
+.ingest-line.fail { color: var(--color-accent-error); }
+.ingest-line.none { color: var(--color-text-muted); }
 .cost-warning { color: var(--color-accent-summary); font-size: 12px; border-left: 3px solid var(--color-accent-summary); padding-left: 8px; }
 .key-hint { color: var(--color-text-muted); font-size: 11px; }
 .output-toggle { display: flex; gap: 6px; }
