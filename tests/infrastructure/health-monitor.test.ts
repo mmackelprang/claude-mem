@@ -100,13 +100,33 @@ describe('HealthMonitor', () => {
         }),
         listen: mock(() => {})
       }));
-      
+
       const spy = spyOn(net, 'createServer').mockImplementation(createServerMock as any);
 
       const result = await isPortInUse(37777);
 
       expect(result).toBe(false);
-      
+
+      spy.mockRestore();
+    });
+
+    it('uses the net bind probe on all platforms (no win32 HTTP special-case) (#17)', async () => {
+      // A dead-but-bound port must read as IN USE everywhere. The mock reports
+      // EADDRINUSE; if a win32 HTTP branch existed it would take the fetch path
+      // and never call createServer — the exact failure of the 4 pre-existing
+      // isPortInUse tests on Windows (Backlog #7).
+      const createServerMock = mock(() => ({
+        once: mock((event: string, cb: Function) => {
+          if (event === 'error') setTimeout(() => cb({ code: 'EADDRINUSE' }), 0);
+        }),
+        listen: mock(() => {}),
+      }));
+      const spy = spyOn(net, 'createServer').mockImplementation(createServerMock as any);
+
+      const result = await isPortInUse(37777);
+
+      expect(result).toBe(true);
+      expect(net.createServer).toHaveBeenCalled(); // failed on win32 before this fix
       spy.mockRestore();
     });
   });

@@ -54,6 +54,7 @@ import {
   waitForPortFree,
   httpShutdown
 } from './infrastructure/HealthMonitor.js';
+import { reapOrphanedChroma } from './infrastructure/orphan-reaper.js';
 import { performGracefulShutdown } from './infrastructure/GracefulShutdown.js';
 import { adoptMergedWorktrees, adoptMergedWorktreesForAllKnownRepos } from './infrastructure/WorktreeAdoption.js';
 
@@ -1010,6 +1011,27 @@ function runServerApiKeyCli(args: string[]): never {
   }
 }
 
+/**
+ * Actionable message for a failed `worker start` (#17). If the port is bound but
+ * unresponsive, name the likely orphaned chroma-mcp cause and point at the log
+ * file the logger actually writes (`claude-mem-<date>.log`, NOT the empty
+ * `worker-<date>.log` the npm scripts used to tail). Never throws.
+ */
+export async function describeStartFailure(port: number): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10); // yyyy-mm-dd, matches logger.ts
+  const logHint = `see ~/.claude-mem/logs/claude-mem-${today}.log`;
+  try {
+    if (await isPortInUse(port)) {
+      return `Worker failed to start: port ${port} is in use but not responding to health checks — ` +
+        `likely an orphaned chroma-mcp/python process holding the socket. ` +
+        `Run \`claude-mem worker stop\` (or kill the chroma-mcp chain), then retry. ${logHint}.`;
+    }
+  } catch {
+    // fall through to the generic-but-logged message
+  }
+  return `Failed to start worker — ${logHint}.`;
+}
+
 async function main() {
   const { command, args: commandArgs } = parseWorkerServiceCommand(process.argv.slice(2));
 
@@ -1032,7 +1054,7 @@ async function main() {
     case 'start': {
       const result = await ensureWorkerStarted(port);
       if (result === 'dead') {
-        exitWithStatus('error', 'Failed to start worker');
+        exitWithStatus('error', await describeStartFailure(port));
       } else {
         exitWithStatus('ready', result === 'warming' ? 'Worker started; still warming up' : undefined);
       }
@@ -1411,11 +1433,38 @@ async function main() {
           (error as NodeJS.ErrnoException).code === 'EADDRINUSE' ||
           /port.*in use|address.*in use/i.test(error.message)
         );
-        if (isPortConflict && await waitForHealth(port, 3000)) {
-          logger.info('SYSTEM', 'Duplicate daemon exiting — another worker already claimed port', { port });
-          process.exit(0);
+        if (isPortConflict) {
+          // A live successor already owns the port → we are the duplicate; exit clean.
+          if (await waitForHealth(port, 3000)) {
+            logger.info('SYSTEM', 'Duplicate daemon exiting — another worker already claimed port', { port });
+            process.exit(0);
+          }
+          // Dead-but-bound (#17): the port is held but nothing answers health —
+          // an orphaned chroma-mcp chain from a previous worker death. Reap it by
+          // image+cmdline+age (NOT taskkill /T, which cannot reach the
+          // re-parented grandchildren) and retry the bind ONCE. Reaping is
+          // win32-only and only reachable here, after THIS worker's live-worker
+          // path above has exited — so it never kills its OWN healthy chroma.
+          // NOTE: the reaper matches every chroma-mcp invocation machine-wide
+          // (it cannot scope by data-dir — remote http installs have none), so a
+          // second, independent claude-mem worker on the same host is the one
+          // residual risk. See orphan-reaper.ts's SCOPE CAVEAT.
+          logger.warn('SYSTEM', 'Port bound but unhealthy — reaping orphaned chroma-mcp before retry', { port });
+          const { killed } = await reapOrphanedChroma();
+          if (killed.length > 0 && await waitForPortFree(port, 5000)) {
+            logger.info('SYSTEM', 'Orphan reaped; retrying worker start once', { port, killed });
+            const retry = new WorkerService();
+            let retryFailed = false;
+            await retry.start().catch((retryError) => {
+              logger.failure('SYSTEM', `Worker failed to start after reaping orphan (port ${port})`, {}, retryError as Error);
+              removePidFileIfOwner(process.pid);
+              retryFailed = true;
+            });
+            if (retryFailed) process.exit(1);
+            return; // retry.start() succeeded — keep the daemon alive
+          }
         }
-        logger.failure('SYSTEM', 'Worker failed to start', {}, error as Error);
+        logger.failure('SYSTEM', `Worker failed to start (port ${port})`, {}, error as Error);
         // Owner-or-dead guarded (Phase 5): clean up our own PID file (written
         // in start() before the failure) or a dead leftover, but never a live
         // competitor's — e.g. a port-conflict loser whose error didn't match

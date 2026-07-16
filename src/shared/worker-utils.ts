@@ -631,6 +631,32 @@ export function getActiveHookType(): TelemetryHookType | null {
   return activeHookType;
 }
 
+/**
+ * Local crash-loop liveness signal (#17). After N consecutive dead worker
+ * starts, return a loud message that names the likely orphaned-socket cause and
+ * the real log file (`claude-mem-<date>.log`) — so a repeated `EADDRINUSE` loop
+ * stops looking like a transient miss (the ~950-failed-hooks-for-a-day failure
+ * mode). Returns `null` below the fail-loud threshold. Pure: the caller supplies
+ * `portInUse`. NOTE: this is the *local* worker analogue only — the
+ * docker-compose worker `healthcheck:` is Backlog #11's deliverable, not this.
+ */
+export function buildCrashLoopDiagnosis(
+  consecutiveFailures: number,
+  portInUse: boolean,
+  port: number,
+  threshold: number = FAIL_LOUD_DEFAULT_THRESHOLD,
+): string | null {
+  if (consecutiveFailures < threshold) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const logHint = `see ~/.claude-mem/logs/claude-mem-${today}.log`;
+  if (portInUse) {
+    return `claude-mem worker has failed to start ${consecutiveFailures}× in a row while port ${port} is held ` +
+      `but unresponsive — likely an orphaned chroma-mcp process holding the socket. ` +
+      `Run \`claude-mem worker stop\` or kill the chroma-mcp chain, then retry. ${logHint}.`;
+  }
+  return `claude-mem worker has failed to start ${consecutiveFailures}× in a row. ${logHint}.`;
+}
+
 export async function recordWorkerUnreachable(): Promise<number> {
   const state = readHookFailureState();
   const next: HookFailureState = {
@@ -657,6 +683,19 @@ export async function recordWorkerUnreachable(): Promise<number> {
         consecutive_failures: next.consecutiveFailures,
         threshold_tripped: true,
       });
+      // Crash-loop liveness (#17): emit the orphaned-socket diagnosis ONCE per
+      // streak (same `=== threshold` gate as the telemetry above). Probe the
+      // port only here, at the crossing — never on the happy path. Lazy-import
+      // the canonical bind probe (Task 3) to avoid a shared→services static
+      // import cycle; best-effort, never breaks the fail-loud path.
+      try {
+        const { isPortInUse } = await import('../services/infrastructure/HealthMonitor.js');
+        const workerPort = getWorkerPort();
+        const diagnosis = buildCrashLoopDiagnosis(next.consecutiveFailures, await isPortInUse(workerPort), workerPort, threshold);
+        if (diagnosis) logger.failure('SYSTEM', diagnosis);
+      } catch {
+        // diagnostic is best-effort — swallow so fail-loud still proceeds
+      }
     }
     // #2292 fix: BLOCKING_FEEDBACK. emitBlockingError flushes the Phase 2
     // stderr buffer (so preceding logger.warn lines also surface) and writes

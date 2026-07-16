@@ -15,7 +15,17 @@ describe('Worker daemon port-race guard (#1447)', () => {
   });
 
   it('calls waitForHealth before exiting on a port conflict', () => {
-    expect(source).toContain('isPortConflict && await waitForHealth(port,');
+    // #17 re-scope: the port-conflict handling was split into nested ifs so the
+    // dead-but-bound branch can reap orphaned chroma-mcp and retry. Assert both
+    // the guard and the health check independently rather than the old combined
+    // single-line conditional.
+    expect(source).toContain('if (isPortConflict)');
+    expect(source).toContain('await waitForHealth(port, 3000)');
+  });
+
+  it('reaps orphaned chroma-mcp and retries once on a dead-but-bound port (#17)', () => {
+    expect(source).toContain('reapOrphanedChroma()');
+    expect(source).toContain('retrying worker start once');
   });
 
   it('uses async catch handler to allow awaiting waitForHealth', () => {
