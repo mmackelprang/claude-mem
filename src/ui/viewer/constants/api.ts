@@ -4,4 +4,8 @@ export const API_ENDPOINTS = {
   PROMPTS: '/api/prompts',
   SETTINGS: '/api/settings',
   STREAM: '/stream',
+  MC_ATTENTION: '/api/mission-control/attention',
+  MC_PROGRESS: '/api/mission-control/progress',
+  MC_VELOCITY: '/api/mission-control/velocity',
+  MC_NEXT_STEPS: '/api/mission-control/next-steps',
 } as const;
