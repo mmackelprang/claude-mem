@@ -1,6 +1,7 @@
 // src/services/mission-control/AttentionMiner.ts
 import type { Database } from 'bun:sqlite';
 import type { GitGhBoundary } from './shell.js';
+import { ESCALATION_CATALOG } from './escalation-catalog.js';
 import {
   upsertMinedItem,
   readOpenAttentionItems,
@@ -31,14 +32,6 @@ export interface MineResult {
 
 /** Only scan observations from the last 7 days for escalation signatures. */
 const ESCALATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** Error-signature patterns that qualify an observation as an escalation. */
-const ERROR_PATTERNS: { key: string; re: RegExp }[] = [
-  { key: 'worker-unreachable', re: /worker (is )?unreachable/i },
-  { key: 'eaddrinuse', re: /EADDRINUSE/i },
-  { key: 'module-not-found', re: /MODULE_NOT_FOUND/i },
-  { key: 'swallowed-startup', re: /failed to start worker/i },
-];
 
 export function extractProposedSpec(path: string, content: string): { ref: string; summary: string } | null {
   // Match a "Status: Proposed" line (tolerant of markdown bold and spacing).
@@ -130,7 +123,7 @@ export function runAttentionMine(
   const liveErrorRefs = new Set<string>();
   for (const row of errorRows) {
     const haystack = `${row.title ?? ''}\n${row.narrative ?? ''}`;
-    for (const pattern of ERROR_PATTERNS) {
+    for (const pattern of ESCALATION_CATALOG) {
       if (pattern.re.test(haystack)) {
         const ref = `error:${pattern.key}`;
         liveErrorRefs.add(ref);
