@@ -104,6 +104,12 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY',
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE',
       'CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED',
+      'CLAUDE_MEM_CONNECTIONS',
+      'CLAUDE_MEM_ACTIVE_CONNECTION',
+      'CLAUDE_MEM_RUNTIME',
+      'CLAUDE_MEM_SERVER_URL',
+      'CLAUDE_MEM_SERVER_API_KEY',
+      'CLAUDE_MEM_SERVER_PROJECT_ID',
     ];
 
     for (const key of settingKeys) {
@@ -231,6 +237,32 @@ export class SettingsRoutes extends BaseRouteHandler {
       } catch (error) {
         logger.debug('SETTINGS', 'Invalid URL format', { url: settings.CLAUDE_MEM_OPENROUTER_SITE_URL, error: error instanceof Error ? error.message : String(error) });
         return { valid: false, error: 'CLAUDE_MEM_OPENROUTER_SITE_URL must be a valid URL' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_RUNTIME) {
+      if (!['worker', 'server'].includes(settings.CLAUDE_MEM_RUNTIME)) {
+        return { valid: false, error: 'CLAUDE_MEM_RUNTIME must be "worker" or "server"' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_CONNECTIONS !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(settings.CLAUDE_MEM_CONNECTIONS);
+      } catch {
+        return { valid: false, error: 'CLAUDE_MEM_CONNECTIONS must be a JSON array of connection profiles' };
+      }
+      if (!Array.isArray(parsed)) {
+        return { valid: false, error: 'CLAUDE_MEM_CONNECTIONS must be a JSON array' };
+      }
+      for (const profile of parsed as Array<Record<string, unknown>>) {
+        if (!profile || typeof profile.id !== 'string' || typeof profile.name !== 'string') {
+          return { valid: false, error: 'Each connection profile needs a string id and name' };
+        }
+        if (profile.runtime !== 'worker' && profile.runtime !== 'server') {
+          return { valid: false, error: `Connection profile "${profile.name}" has an invalid runtime (must be worker|server)` };
+        }
       }
     }
 
