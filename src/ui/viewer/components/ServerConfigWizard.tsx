@@ -88,7 +88,10 @@ export function ServerConfigWizard({ serverContext }: { serverContext: boolean }
 }
 
 function maskKey(output: string): string {
-  return output.replace(/(ANTHROPIC_API_KEY[=:]\s*)(\S+)/, (_m, p1, val) =>
+  // Match the whole value to end-of-line (not \S+, which stops at the first
+  // space and would mangle the multi-word "<paste your key>" placeholder into
+  // "sk-ant-… your key>"). A real key has no spaces, so .+ captures it fully.
+  return output.replace(/(ANTHROPIC_API_KEY[=:]\s*)(.+)/, (_m, p1, val) =>
     val === '<paste your key>' ? `${p1}${val}` : `${p1}sk-ant-…`);
 }
 function ingestLabel(s: IngestStatus | null): string {
