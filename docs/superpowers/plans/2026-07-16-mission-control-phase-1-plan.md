@@ -8,6 +8,22 @@
 
 **Tech Stack:** TypeScript, `bun:sqlite` (`Database`), Express 5 (`BaseRouteHandler`), `Bun.spawnSync` for `gh`/`git`, React 19 viewer (esbuild bundle via `scripts/build-viewer.js`), `bun test` with `:memory:` fixture databases.
 
+## ⚖️ Scope narrowed to 3 panes (2026-07-16, Mark's call — shipped in PR #20)
+
+**What shipped is 3 panes, not 4.** Builder UAT found that `handleVelocity` + `loadSpecFiles` resolve repo `docs/` via `getPackageRoot()`, which returns the **plugin install root** — where `docs/` is *not* shipped. So the three sources that need repo-filesystem access cannot resolve their inputs from the *deployed worker's* environment. Mark's decision: **ship the panes that work from the worker's env; defer the repo-filesystem ones behind a clean feature gate (prefer gating over deleting, so the follow-up re-enables rather than rewrites).**
+
+- **SHIPPED (resolve from SQLite + `gh`):**
+  - **Attention pane** — error-observation **escalations** (SQLite) + open-PR **reviews** (`gh`). Kept the pre-merge review fixes: hot-path `gh` timeout + `ghAvailable` 60s cache, loud per-section parser, bounded (7-day) escalation scan + auto-resolve.
+  - **Progress pane** — `ProgressQuery` (per-agent × time rollup, SQLite).
+  - **Next-steps pane** — `NextStepsFeed` (deduped `session_summaries.next_steps`, SQLite).
+- **DEFERRED to Backlog #24 (need repo-root filesystem access):**
+  - **Velocity** (Task 5 pane) — reads `docs/BUILDER_QUEUE.md`. `VelocityQuery.ts` (Task 5) stays in the tree, unit-tested; the route returns a `{ deferred: true }` state (no `getPackageRoot()` read, no crash) and the UI pane is not rendered.
+  - **Proposed-spec review mining** + **doc-Open-Questions mining** (Task 7) — read `docs/`. `extractProposedSpec` / `extractOpenQuestions` stay in the miner; they are fed **no** files (`loadSpecFiles()` returns `[]`) and their auto-resolve is skipped (`specMiningEnabled=false`) so a gated pass never wipes previously-open `spec:`/`question:` items.
+- **The gate** is one function — `src/services/mission-control/repo-root.ts` `resolveRepoRoot()` returns `null` in Phase 1. `#24` implements it (env `CLAUDE_MEM_PROJECT_ROOT` vs cwd/git auto-detect vs dev-only) — a one-function change that RE-ENABLES velocity + spec/doc mining without rewriting the miner, queries, routes, or UI.
+- **Note for #24 — the "questions" type has a *second* blocker beyond repo-root:** its `captured AskUserQuestion` half (spec §D6/§5.3) is unreachable because `AskUserQuestion` is in the default `CLAUDE_MEM_SKIP_TOOLS` (`SettingsDefaultsManager.ts:109`) — it is dropped before capture (`worker/http/shared.ts:73`), so it never reaches the observation stream. Re-enabling the doc-Open-Questions half (repo-root, #24) does **not** enable the captured-AskUserQuestion half; that needs a separate capture decision.
+
+Everything below is the original plan (Tasks 1–9) as executed. Tasks 1–4, 6 shipped as written. Task 5 shipped as a library + gated route (pane deferred). Task 7 shipped with the spec/question sources gated. Tasks 8–9 shipped with velocity gated + the 3-pane UI.
+
 ## Global Constraints
 
 - **Phase 1 is read/mine only.** No `attention_raise` MCP tool, no agent-facing attention writes, no LLM synthesis, no roadmap-row linkage, no stale detection, no new-row proposals, no semantic (Chroma) matching, and **no write of any kind toward `docs/BUILDER_QUEUE.md`**. (Spec §6, §10.) The `attention_items` table MAY be created as the store for *mined* items — `source = 'mine'` only in Phase 1.
