@@ -109,6 +109,7 @@ export class SessionStore {
     this.ensurePendingMessagesSessionToolUniqueIndex();
     this.ensureSyncedAtColumns(options.cloudSyncStatePath ?? paths.cloudSyncState());
     this.requeuePromptCloudSyncAfterMapperFix();
+    this.createAttentionItemsTable();
   }
 
   private getIndexColumns(indexName: string): string[] {
@@ -497,6 +498,50 @@ export class SessionStore {
     });
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(40, new Date().toISOString());
+  }
+
+  private createAttentionItemsTable(): void {
+    const applied = this.db
+      .prepare('SELECT version FROM schema_versions WHERE version = ?')
+      .get(41) as { version: number } | undefined;
+    if (applied) return;
+
+    const existing = this.db
+      .query("SELECT name FROM sqlite_master WHERE type='table' AND name='attention_items'")
+      .all() as { name: string }[];
+    if (existing.length > 0) {
+      this.db
+        .prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)')
+        .run(41, new Date().toISOString());
+      return;
+    }
+
+    this.db.run(`
+      CREATE TABLE attention_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        created_at_epoch INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        blocked_on TEXT,
+        urgency TEXT NOT NULL DEFAULT 'normal',
+        source TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        resolved_at INTEGER,
+        resolved_by TEXT,
+        project TEXT,
+        agent_type TEXT,
+        agent_id TEXT,
+        memory_session_id TEXT
+      )
+    `);
+    this.db.run('CREATE UNIQUE INDEX IF NOT EXISTS ux_attention_items_source_ref ON attention_items(source, ref)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_attention_items_status ON attention_items(status)');
+
+    this.db
+      .prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)')
+      .run(41, new Date().toISOString());
   }
 
   // Rows the standalone cloud-sync client already uploaded (its cursors live in

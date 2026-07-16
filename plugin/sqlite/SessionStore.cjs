@@ -1,17 +1,17 @@
-"use strict";var k=Object.defineProperty;var ae=Object.getOwnPropertyDescriptor;var de=Object.getOwnPropertyNames;var _e=Object.prototype.hasOwnProperty;var pe=(a,e)=>{for(var t in e)k(a,t,{get:e[t],enumerable:!0})},ue=(a,e,t,s)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of de(e))!_e.call(a,r)&&r!==t&&k(a,r,{get:()=>e[r],enumerable:!(s=ae(e,r))||s.enumerable});return a};var Ee=a=>ue(k({},"__esModule",{value:!0}),a);var ve={};pe(ve,{SessionStore:()=>q});module.exports=Ee(ve);var j=require("bun:sqlite"),x=require("fs");var l=require("path"),P=require("os"),D=require("fs"),V=require("url");var me=null;function ce(a){return(me??process.stderr.write.bind(process.stderr))(a)}function M(a){ce(a)}var Me=process.platform==="win32";function le(a){return a.replace(/^\uFEFF/,"")}function F(a){return JSON.parse(le(a))}var Ie={};function Te(){return typeof __dirname<"u"?__dirname:(0,l.dirname)((0,V.fileURLToPath)(Ie.url))}var ke=Te();function be(){if(process.env.CLAUDE_MEM_DATA_DIR)return process.env.CLAUDE_MEM_DATA_DIR;let a=(0,l.join)((0,P.homedir)(),".claude-mem"),e=(0,l.join)(a,"settings.json");try{if((0,D.existsSync)(e)){let t=F((0,D.readFileSync)(e,"utf-8")),s=t.env??t;if(s.CLAUDE_MEM_DATA_DIR)return s.CLAUDE_MEM_DATA_DIR}}catch{}return a}var I=be(),Se=process.env.CLAUDE_CONFIG_DIR||(0,l.join)((0,P.homedir)(),".claude"),Pe=(0,l.join)(Se,"plugins","marketplaces","thedotmack"),Re=(0,l.join)(I,"logs"),Xe=(0,l.join)(I,"settings.json"),Y=(0,l.join)(I,"claude-mem.db"),Ne=(0,l.join)(I,"observer-sessions"),X=(0,l.basename)(Ne);function K(a){(0,D.mkdirSync)(a,{recursive:!0})}var U={dataDir:()=>I,workerPid:()=>(0,l.join)(I,"worker.pid"),serverPid:()=>(0,l.join)(I,".server-beta.pid"),serverPort:()=>(0,l.join)(I,".server-beta.port"),serverRuntime:()=>(0,l.join)(I,".server-beta.runtime.json"),settings:()=>(0,l.join)(I,"settings.json"),database:()=>(0,l.join)(I,"claude-mem.db"),chroma:()=>(0,l.join)(I,"chroma"),combinedCerts:()=>(0,l.join)(I,"combined_certs.pem"),transcriptsConfig:()=>(0,l.join)(I,"transcript-watch.json"),transcriptsState:()=>(0,l.join)(I,"transcript-watch-state.json"),cloudSyncState:()=>(0,l.join)(I,"cloud-sync-state.json"),corpora:()=>(0,l.join)(I,"corpora"),supervisorRegistry:()=>(0,l.join)(I,"supervisor.json"),envFile:()=>(0,l.join)(I,".env"),logsDir:()=>Re};var C=require("fs"),Q=require("path");var $=(n=>(n[n.DEBUG=0]="DEBUG",n[n.INFO=1]="INFO",n[n.WARN=2]="WARN",n[n.ERROR=3]="ERROR",n[n.SILENT=4]="SILENT",n))($||{}),G=null;function B(a){return a instanceof Error||typeof a=="object"&&a!==null&&typeof a.message=="string"}var H=class{level=null;useColor;logFilePath=null;logFileInitialized=!1;constructor(){this.useColor=process.stdout.isTTY??!1}ensureLogFileInitialized(){if(!this.logFileInitialized){this.logFileInitialized=!0;try{let e=U.logsDir();(0,C.existsSync)(e)||(0,C.mkdirSync)(e,{recursive:!0});let t=new Date().toISOString().split("T")[0];this.logFilePath=(0,Q.join)(e,`claude-mem-${t}.log`)}catch(e){console.error("[LOGGER] Failed to initialize log file:",e instanceof Error?e.message:String(e)),this.logFilePath=null}}}getLevel(){if(this.level===null)try{let e=U.settings();if((0,C.existsSync)(e)){let t=(0,C.readFileSync)(e,"utf-8"),r=(F(t).CLAUDE_MEM_LOG_LEVEL||"INFO").toUpperCase();this.level=$[r]??1}else this.level=1}catch(e){console.error("[LOGGER] Failed to load log level from settings:",e instanceof Error?e.message:String(e)),this.level=1}return this.level}formatData(e){if(e==null)return"";if(typeof e=="string")return e;if(typeof e=="number"||typeof e=="boolean")return e.toString();if(typeof e=="object"){if(B(e)){let s=e.stack;return this.getLevel()===0&&s?`${e.message}
-${s}`:e.message}if(Array.isArray(e))return`[${e.length} items]`;let t=Object.keys(e);return t.length===0?"{}":t.length<=3?JSON.stringify(e):`{${t.length} keys: ${t.slice(0,3).join(", ")}...}`}return String(e)}formatTool(e,t){if(!t)return e;let s=t;if(typeof t=="string")try{s=JSON.parse(t)}catch{s=t}if(e==="Bash"&&s.command)return`${e}(${s.command})`;if(s.file_path)return`${e}(${s.file_path})`;if(s.notebook_path)return`${e}(${s.notebook_path})`;if(e==="Glob"&&s.pattern)return`${e}(${s.pattern})`;if(e==="Grep"&&s.pattern)return`${e}(${s.pattern})`;if(s.url)return`${e}(${s.url})`;if(s.query)return`${e}(${s.query})`;if(e==="Task"){if(s.subagent_type)return`${e}(${s.subagent_type})`;if(s.description)return`${e}(${s.description})`}return e==="Skill"&&s.skill?`${e}(${s.skill})`:e==="LSP"&&s.operation?`${e}(${s.operation})`:e}formatTimestamp(e){let t=e.getFullYear(),s=String(e.getMonth()+1).padStart(2,"0"),r=String(e.getDate()).padStart(2,"0"),n=String(e.getHours()).padStart(2,"0"),o=String(e.getMinutes()).padStart(2,"0"),i=String(e.getSeconds()).padStart(2,"0"),p=String(e.getMilliseconds()).padStart(3,"0");return`${t}-${s}-${r} ${n}:${o}:${i}.${p}`}log(e,t,s,r,n){if(e<this.getLevel())return;this.ensureLogFileInitialized();let o=this.formatTimestamp(new Date),i=$[e].padEnd(5),p=t.padEnd(6),_="";r?.correlationId?_=`[${r.correlationId}] `:r?.sessionId&&(_=`[session-${r.sessionId}] `);let E="";if(n!=null)if(B(n)){let R=n.stack;E=this.getLevel()===0&&R?`
+"use strict";var k=Object.defineProperty;var ae=Object.getOwnPropertyDescriptor;var de=Object.getOwnPropertyNames;var _e=Object.prototype.hasOwnProperty;var pe=(a,e)=>{for(var t in e)k(a,t,{get:e[t],enumerable:!0})},Ee=(a,e,t,s)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of de(e))!_e.call(a,r)&&r!==t&&k(a,r,{get:()=>e[r],enumerable:!(s=ae(e,r))||s.enumerable});return a};var ue=a=>Ee(k({},"__esModule",{value:!0}),a);var ve={};pe(ve,{SessionStore:()=>q});module.exports=ue(ve);var j=require("bun:sqlite"),x=require("fs");var l=require("path"),X=require("os"),D=require("fs"),V=require("url");var me=null;function ce(a){return(me??process.stderr.write.bind(process.stderr))(a)}function F(a){ce(a)}var Fe=process.platform==="win32";function le(a){return a.replace(/^\uFEFF/,"")}function M(a){return JSON.parse(le(a))}var Ie={};function Te(){return typeof __dirname<"u"?__dirname:(0,l.dirname)((0,V.fileURLToPath)(Ie.url))}var ke=Te();function be(){if(process.env.CLAUDE_MEM_DATA_DIR)return process.env.CLAUDE_MEM_DATA_DIR;let a=(0,l.join)((0,X.homedir)(),".claude-mem"),e=(0,l.join)(a,"settings.json");try{if((0,D.existsSync)(e)){let t=M((0,D.readFileSync)(e,"utf-8")),s=t.env??t;if(s.CLAUDE_MEM_DATA_DIR)return s.CLAUDE_MEM_DATA_DIR}}catch{}return a}var I=be(),Se=process.env.CLAUDE_CONFIG_DIR||(0,l.join)((0,X.homedir)(),".claude"),Xe=(0,l.join)(Se,"plugins","marketplaces","thedotmack"),Ne=(0,l.join)(I,"logs"),Pe=(0,l.join)(I,"settings.json"),Y=(0,l.join)(I,"claude-mem.db"),Re=(0,l.join)(I,"observer-sessions"),P=(0,l.basename)(Re);function K(a){(0,D.mkdirSync)(a,{recursive:!0})}var U={dataDir:()=>I,workerPid:()=>(0,l.join)(I,"worker.pid"),serverPid:()=>(0,l.join)(I,".server-beta.pid"),serverPort:()=>(0,l.join)(I,".server-beta.port"),serverRuntime:()=>(0,l.join)(I,".server-beta.runtime.json"),settings:()=>(0,l.join)(I,"settings.json"),database:()=>(0,l.join)(I,"claude-mem.db"),chroma:()=>(0,l.join)(I,"chroma"),combinedCerts:()=>(0,l.join)(I,"combined_certs.pem"),transcriptsConfig:()=>(0,l.join)(I,"transcript-watch.json"),transcriptsState:()=>(0,l.join)(I,"transcript-watch-state.json"),cloudSyncState:()=>(0,l.join)(I,"cloud-sync-state.json"),corpora:()=>(0,l.join)(I,"corpora"),supervisorRegistry:()=>(0,l.join)(I,"supervisor.json"),envFile:()=>(0,l.join)(I,".env"),logsDir:()=>Ne};var C=require("fs"),Q=require("path");var $=(n=>(n[n.DEBUG=0]="DEBUG",n[n.INFO=1]="INFO",n[n.WARN=2]="WARN",n[n.ERROR=3]="ERROR",n[n.SILENT=4]="SILENT",n))($||{}),G=null;function B(a){return a instanceof Error||typeof a=="object"&&a!==null&&typeof a.message=="string"}var H=class{level=null;useColor;logFilePath=null;logFileInitialized=!1;constructor(){this.useColor=process.stdout.isTTY??!1}ensureLogFileInitialized(){if(!this.logFileInitialized){this.logFileInitialized=!0;try{let e=U.logsDir();(0,C.existsSync)(e)||(0,C.mkdirSync)(e,{recursive:!0});let t=new Date().toISOString().split("T")[0];this.logFilePath=(0,Q.join)(e,`claude-mem-${t}.log`)}catch(e){console.error("[LOGGER] Failed to initialize log file:",e instanceof Error?e.message:String(e)),this.logFilePath=null}}}getLevel(){if(this.level===null)try{let e=U.settings();if((0,C.existsSync)(e)){let t=(0,C.readFileSync)(e,"utf-8"),r=(M(t).CLAUDE_MEM_LOG_LEVEL||"INFO").toUpperCase();this.level=$[r]??1}else this.level=1}catch(e){console.error("[LOGGER] Failed to load log level from settings:",e instanceof Error?e.message:String(e)),this.level=1}return this.level}formatData(e){if(e==null)return"";if(typeof e=="string")return e;if(typeof e=="number"||typeof e=="boolean")return e.toString();if(typeof e=="object"){if(B(e)){let s=e.stack;return this.getLevel()===0&&s?`${e.message}
+${s}`:e.message}if(Array.isArray(e))return`[${e.length} items]`;let t=Object.keys(e);return t.length===0?"{}":t.length<=3?JSON.stringify(e):`{${t.length} keys: ${t.slice(0,3).join(", ")}...}`}return String(e)}formatTool(e,t){if(!t)return e;let s=t;if(typeof t=="string")try{s=JSON.parse(t)}catch{s=t}if(e==="Bash"&&s.command)return`${e}(${s.command})`;if(s.file_path)return`${e}(${s.file_path})`;if(s.notebook_path)return`${e}(${s.notebook_path})`;if(e==="Glob"&&s.pattern)return`${e}(${s.pattern})`;if(e==="Grep"&&s.pattern)return`${e}(${s.pattern})`;if(s.url)return`${e}(${s.url})`;if(s.query)return`${e}(${s.query})`;if(e==="Task"){if(s.subagent_type)return`${e}(${s.subagent_type})`;if(s.description)return`${e}(${s.description})`}return e==="Skill"&&s.skill?`${e}(${s.skill})`:e==="LSP"&&s.operation?`${e}(${s.operation})`:e}formatTimestamp(e){let t=e.getFullYear(),s=String(e.getMonth()+1).padStart(2,"0"),r=String(e.getDate()).padStart(2,"0"),n=String(e.getHours()).padStart(2,"0"),o=String(e.getMinutes()).padStart(2,"0"),i=String(e.getSeconds()).padStart(2,"0"),p=String(e.getMilliseconds()).padStart(3,"0");return`${t}-${s}-${r} ${n}:${o}:${i}.${p}`}log(e,t,s,r,n){if(e<this.getLevel())return;this.ensureLogFileInitialized();let o=this.formatTimestamp(new Date),i=$[e].padEnd(5),p=t.padEnd(6),_="";r?.correlationId?_=`[${r.correlationId}] `:r?.sessionId&&(_=`[session-${r.sessionId}] `);let u="";if(n!=null)if(B(n)){let N=n.stack;u=this.getLevel()===0&&N?`
 ${n.message}
-${R}`:` ${n.message}`}else if(this.getLevel()===0&&typeof n=="object")try{E=`
-`+JSON.stringify(n,null,2)}catch{E=" "+this.formatData(n)}else E=" "+this.formatData(n);let h="";if(r){let{sessionId:R,memorySessionId:O,correlationId:N,...m}=r;Object.keys(m).length>0&&(h=` {${Object.entries(m).map(([f,v])=>`${f}=${v}`).join(", ")}}`)}let T=`[${o}] [${i}] [${p}] ${_}${s}${h}${E}`;if(this.logFilePath)try{(0,C.appendFileSync)(this.logFilePath,T+`
-`,"utf8")}catch(R){let O=R instanceof Error?R:new Error(String(R));M(`[LOGGER] Failed to write to log file: ${O.message}
+${N}`:` ${n.message}`}else if(this.getLevel()===0&&typeof n=="object")try{u=`
+`+JSON.stringify(n,null,2)}catch{u=" "+this.formatData(n)}else u=" "+this.formatData(n);let h="";if(r){let{sessionId:N,memorySessionId:O,correlationId:R,...m}=r;Object.keys(m).length>0&&(h=` {${Object.entries(m).map(([f,v])=>`${f}=${v}`).join(", ")}}`)}let T=`[${o}] [${i}] [${p}] ${_}${s}${h}${u}`;if(this.logFilePath)try{(0,C.appendFileSync)(this.logFilePath,T+`
+`,"utf8")}catch(N){let O=N instanceof Error?N:new Error(String(N));F(`[LOGGER] Failed to write to log file: ${O.message}
 ${O.stack??""}
-`)}else M(T+`
-`)}debug(e,t,s,r){this.log(0,e,t,s,r)}info(e,t,s,r){this.log(1,e,t,s,r)}warn(e,t,s,r){this.log(2,e,t,s,r)}setErrorSink(e){G=e}error(e,t,s,r){this.log(3,e,t,s,r),this.routeErrorToSink(t,s,r)}routeErrorToSink(e,t,s){try{if(!G||!B(s))return;G(s instanceof Error?s:new Error(s.message))}catch{}}dataIn(e,t,s,r){this.info(e,`\u2192 ${t}`,s,r)}dataOut(e,t,s,r){this.info(e,`\u2190 ${t}`,s,r)}success(e,t,s,r){this.info(e,`\u2713 ${t}`,s,r)}failure(e,t,s,r){this.error(e,`\u2717 ${t}`,s,r)}},d=new H;var J=require("crypto");function z(a,e,t){return(0,J.createHash)("sha256").update([a||"",e||"",t||""].join("\0")).digest("hex").slice(0,16)}var u="claude";function he(a){return a.trim().toLowerCase().replace(/\s+/g,"-")}function L(a){if(!a)return u;let e=he(a);return e?e==="transcript"||e.includes("codex")?"codex":e.includes("cursor")?"cursor":e.includes("claude")?"claude":e:u}function Z(a){let e=["claude","codex","cursor"];return[...a].sort((t,s)=>{let r=e.indexOf(t),n=e.indexOf(s);return r!==-1||n!==-1?r===-1?1:n===-1?-1:r-n:t.localeCompare(s)})}function ee(a,e,t,s,r){let n=Date.now()-s,o=r!==void 0?"up.session_db_id = ?":"up.content_session_id = ?",i=r??e;return a.prepare(`
+`)}else F(T+`
+`)}debug(e,t,s,r){this.log(0,e,t,s,r)}info(e,t,s,r){this.log(1,e,t,s,r)}warn(e,t,s,r){this.log(2,e,t,s,r)}setErrorSink(e){G=e}error(e,t,s,r){this.log(3,e,t,s,r),this.routeErrorToSink(t,s,r)}routeErrorToSink(e,t,s){try{if(!G||!B(s))return;G(s instanceof Error?s:new Error(s.message))}catch{}}dataIn(e,t,s,r){this.info(e,`\u2192 ${t}`,s,r)}dataOut(e,t,s,r){this.info(e,`\u2190 ${t}`,s,r)}success(e,t,s,r){this.info(e,`\u2713 ${t}`,s,r)}failure(e,t,s,r){this.error(e,`\u2717 ${t}`,s,r)}},d=new H;var J=require("crypto");function z(a,e,t){return(0,J.createHash)("sha256").update([a||"",e||"",t||""].join("\0")).digest("hex").slice(0,16)}var E="claude";function he(a){return a.trim().toLowerCase().replace(/\s+/g,"-")}function L(a){if(!a)return E;let e=he(a);return e?e==="transcript"||e.includes("codex")?"codex":e.includes("cursor")?"cursor":e.includes("claude")?"claude":e:E}function Z(a){let e=["claude","codex","cursor"];return[...a].sort((t,s)=>{let r=e.indexOf(t),n=e.indexOf(s);return r!==-1||n!==-1?r===-1?1:n===-1?-1:r-n:t.localeCompare(s)})}function ee(a,e,t,s,r){let n=Date.now()-s,o=r!==void 0?"up.session_db_id = ?":"up.content_session_id = ?",i=r??e;return a.prepare(`
     SELECT
       up.*,
       s.memory_session_id,
       s.project,
-      COALESCE(s.platform_source, '${u}') as platform_source
+      COALESCE(s.platform_source, '${E}') as platform_source
     FROM user_prompts up
     JOIN sdk_sessions s ON up.session_db_id = s.id
     WHERE ${o}
@@ -25,24 +25,24 @@ ${O.stack??""}
     WHERE type = 'table'
       AND name NOT LIKE 'sqlite_%'
     LIMIT 1
-  `).get()!=null}function y(a,e,t){try{a.run(e)}catch(s){let r=s instanceof Error?s:new Error(String(s));throw d.warn("DB",`Failed to apply SQLite pragma ${t}`,{sql:e},r),s}}function ie(a,e={}){let{enableWal:t=!0,enableIncrementalAutoVacuum:s=!0}=e;y(a,`PRAGMA busy_timeout = ${Ae}`,"busy_timeout"),y(a,"PRAGMA foreign_keys = ON","foreign_keys"),y(a,"PRAGMA synchronous = NORMAL","synchronous"),y(a,`PRAGMA journal_size_limit = ${Le}`,"journal_size_limit"),s&&!Ce(a)&&y(a,"PRAGMA auto_vacuum = INCREMENTAL","auto_vacuum"),t&&y(a,"PRAGMA journal_mode = WAL","journal_mode")}var q=class{db;constructor(e=Y,t={}){e instanceof j.Database?this.db=e:(e!==":memory:"&&K(I),this.db=new j.Database(e)),ie(this.db),this.initializeSchema(),this.ensureWorkerPortColumn(),this.ensurePromptTrackingColumns(),this.removeSessionSummariesUniqueConstraint(),this.addObservationHierarchicalFields(),this.makeObservationsTextNullable(),this.createUserPromptsTable(),this.ensureDiscoveryTokensColumn(),this.createPendingMessagesTable(),this.renameSessionIdColumns(),this.addFailedAtEpochColumn(),this.addOnUpdateCascadeToForeignKeys(),this.addObservationContentHashColumn(),this.addSessionCustomTitleColumn(),this.addSessionPlatformSourceColumn(),this.addObservationModelColumns(),this.ensureMergedIntoProjectColumns(),this.addObservationSubagentColumns(),this.addObservationsUniqueContentHashIndex(),this.addObservationsMetadataColumn(),this.dropDeadPendingMessagesColumns(),this.ensurePendingMessagesToolUseIdColumn(),this.dropWorkerPidColumn(),this.ensureSDKSessionsPlatformContentIdentity(),this.ensureUserPromptsSessionDbId(),this.ensurePendingMessagesSessionToolUniqueIndex(),this.ensureSyncedAtColumns(t.cloudSyncStatePath??U.cloudSyncState()),this.requeuePromptCloudSyncAfterMapperFix()}getIndexColumns(e){return this.db.query(`PRAGMA index_info(${JSON.stringify(e)})`).all().map(t=>t.name)}hasUniqueIndexOnColumns(e,t){return this.db.query(`PRAGMA index_list(${e})`).all().some(r=>{if(r.unique!==1)return!1;let n=this.getIndexColumns(r.name);return n.length===t.length&&n.every((o,i)=>o===t[i])})}resolvePromptSessionDbId(e,t,s){if(t!==void 0)return t;let r=s?L(s):void 0;return r?this.db.prepare(`
+  `).get()!=null}function y(a,e,t){try{a.run(e)}catch(s){let r=s instanceof Error?s:new Error(String(s));throw d.warn("DB",`Failed to apply SQLite pragma ${t}`,{sql:e},r),s}}function ie(a,e={}){let{enableWal:t=!0,enableIncrementalAutoVacuum:s=!0}=e;y(a,`PRAGMA busy_timeout = ${Ae}`,"busy_timeout"),y(a,"PRAGMA foreign_keys = ON","foreign_keys"),y(a,"PRAGMA synchronous = NORMAL","synchronous"),y(a,`PRAGMA journal_size_limit = ${Le}`,"journal_size_limit"),s&&!Ce(a)&&y(a,"PRAGMA auto_vacuum = INCREMENTAL","auto_vacuum"),t&&y(a,"PRAGMA journal_mode = WAL","journal_mode")}var q=class{db;constructor(e=Y,t={}){e instanceof j.Database?this.db=e:(e!==":memory:"&&K(I),this.db=new j.Database(e)),ie(this.db),this.initializeSchema(),this.ensureWorkerPortColumn(),this.ensurePromptTrackingColumns(),this.removeSessionSummariesUniqueConstraint(),this.addObservationHierarchicalFields(),this.makeObservationsTextNullable(),this.createUserPromptsTable(),this.ensureDiscoveryTokensColumn(),this.createPendingMessagesTable(),this.renameSessionIdColumns(),this.addFailedAtEpochColumn(),this.addOnUpdateCascadeToForeignKeys(),this.addObservationContentHashColumn(),this.addSessionCustomTitleColumn(),this.addSessionPlatformSourceColumn(),this.addObservationModelColumns(),this.ensureMergedIntoProjectColumns(),this.addObservationSubagentColumns(),this.addObservationsUniqueContentHashIndex(),this.addObservationsMetadataColumn(),this.dropDeadPendingMessagesColumns(),this.ensurePendingMessagesToolUseIdColumn(),this.dropWorkerPidColumn(),this.ensureSDKSessionsPlatformContentIdentity(),this.ensureUserPromptsSessionDbId(),this.ensurePendingMessagesSessionToolUniqueIndex(),this.ensureSyncedAtColumns(t.cloudSyncStatePath??U.cloudSyncState()),this.requeuePromptCloudSyncAfterMapperFix(),this.createAttentionItemsTable()}getIndexColumns(e){return this.db.query(`PRAGMA index_info(${JSON.stringify(e)})`).all().map(t=>t.name)}hasUniqueIndexOnColumns(e,t){return this.db.query(`PRAGMA index_list(${e})`).all().some(r=>{if(r.unique!==1)return!1;let n=this.getIndexColumns(r.name);return n.length===t.length&&n.every((o,i)=>o===t[i])})}resolvePromptSessionDbId(e,t,s){if(t!==void 0)return t;let r=s?L(s):void 0;return r?this.db.prepare(`
         SELECT id
         FROM sdk_sessions
         WHERE COALESCE(NULLIF(platform_source, ''), ?) = ?
           AND content_session_id = ?
         LIMIT 1
-      `).get(u,r,e)?.id??null:this.db.prepare(`
+      `).get(E,r,e)?.id??null:this.db.prepare(`
       SELECT id
       FROM sdk_sessions
       WHERE content_session_id = ?
-      ORDER BY CASE COALESCE(NULLIF(platform_source, ''), '${u}')
-        WHEN '${u}' THEN 0
+      ORDER BY CASE COALESCE(NULLIF(platform_source, ''), '${E}')
+        WHEN '${E}' THEN 0
         ELSE 1
       END, id
       LIMIT 1
-    `).get(e)?.id??null}dropWorkerPidColumn(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(32),s=this.db.query("PRAGMA table_info(pending_messages)").all().some(r=>r.name==="worker_pid");if(!(e&&!s)){if(s)try{this.db.run("DROP INDEX IF EXISTS idx_pending_messages_worker_pid"),this.db.run("ALTER TABLE pending_messages DROP COLUMN worker_pid"),d.debug("DB","Dropped worker_pid column and its index from pending_messages")}catch(r){d.warn("DB","Failed to drop worker_pid column from pending_messages",{},r instanceof Error?r:new Error(String(r)));return}e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(32,new Date().toISOString())}}ensureSDKSessionsPlatformContentIdentity(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(33),t=this.hasUniqueIndexOnColumns("sdk_sessions",["content_session_id"]),s=this.hasUniqueIndexOnColumns("sdk_sessions",["platform_source","content_session_id"]),n=this.db.query("PRAGMA table_info(sdk_sessions)").all().some(o=>o.name==="platform_source");if(!(e&&!t&&s&&n)){if(n||this.db.run(`ALTER TABLE sdk_sessions ADD COLUMN platform_source TEXT NOT NULL DEFAULT '${u}'`),this.db.run(`
+    `).get(e)?.id??null}dropWorkerPidColumn(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(32),s=this.db.query("PRAGMA table_info(pending_messages)").all().some(r=>r.name==="worker_pid");if(!(e&&!s)){if(s)try{this.db.run("DROP INDEX IF EXISTS idx_pending_messages_worker_pid"),this.db.run("ALTER TABLE pending_messages DROP COLUMN worker_pid"),d.debug("DB","Dropped worker_pid column and its index from pending_messages")}catch(r){d.warn("DB","Failed to drop worker_pid column from pending_messages",{},r instanceof Error?r:new Error(String(r)));return}e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(32,new Date().toISOString())}}ensureSDKSessionsPlatformContentIdentity(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(33),t=this.hasUniqueIndexOnColumns("sdk_sessions",["content_session_id"]),s=this.hasUniqueIndexOnColumns("sdk_sessions",["platform_source","content_session_id"]),n=this.db.query("PRAGMA table_info(sdk_sessions)").all().some(o=>o.name==="platform_source");if(!(e&&!t&&s&&n)){if(n||this.db.run(`ALTER TABLE sdk_sessions ADD COLUMN platform_source TEXT NOT NULL DEFAULT '${E}'`),this.db.run(`
       UPDATE sdk_sessions
-      SET platform_source = '${u}'
+      SET platform_source = '${E}'
       WHERE platform_source IS NULL OR platform_source = ''
     `),t){this.db.run("PRAGMA foreign_keys = OFF"),this.db.run("BEGIN TRANSACTION");try{this.rebuildSdkSessionsWithCompositeIdentity(e),this.db.run("COMMIT")}catch(o){this.db.run("ROLLBACK");let i=o instanceof Error?o:new Error(String(o));throw d.error("DB","Failed to rebuild sdk_sessions with composite identity, rolled back",{},i),o}finally{this.db.run("PRAGMA foreign_keys = ON")}return}this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS ux_sdk_sessions_platform_content ON sdk_sessions(platform_source, content_session_id)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_platform_source ON sdk_sessions(platform_source)"),e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(33,new Date().toISOString())}}rebuildSdkSessionsWithCompositeIdentity(e){this.db.run("DROP TABLE IF EXISTS sdk_sessions_new"),this.db.run(`
       CREATE TABLE sdk_sessions_new (
@@ -50,7 +50,7 @@ ${O.stack??""}
         content_session_id TEXT NOT NULL,
         memory_session_id TEXT UNIQUE,
         project TEXT NOT NULL,
-        platform_source TEXT NOT NULL DEFAULT '${u}',
+        platform_source TEXT NOT NULL DEFAULT '${E}',
         user_prompt TEXT,
         started_at TEXT NOT NULL,
         started_at_epoch INTEGER NOT NULL,
@@ -69,27 +69,27 @@ ${O.stack??""}
       )
       SELECT
         id, content_session_id, memory_session_id, project,
-        COALESCE(NULLIF(platform_source, ''), '${u}'),
+        COALESCE(NULLIF(platform_source, ''), '${E}'),
         user_prompt, started_at, started_at_epoch, completed_at, completed_at_epoch,
         status, worker_port, prompt_counter, custom_title
       FROM sdk_sessions
     `),this.db.run("DROP TABLE sdk_sessions"),this.db.run("ALTER TABLE sdk_sessions_new RENAME TO sdk_sessions"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_claude_id ON sdk_sessions(content_session_id)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_sdk_id ON sdk_sessions(memory_session_id)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_project ON sdk_sessions(project)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_status ON sdk_sessions(status)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_started ON sdk_sessions(started_at_epoch DESC)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_platform_source ON sdk_sessions(platform_source)"),this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS ux_sdk_sessions_platform_content ON sdk_sessions(platform_source, content_session_id)"),e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(33,new Date().toISOString())}ensureUserPromptsSessionDbId(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(34);if(this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='user_prompts'").all().length===0){this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(34,new Date().toISOString());return}let r=this.db.query("PRAGMA table_info(user_prompts)").all().some(_=>_.name==="session_db_id"),o=this.db.query("PRAGMA foreign_key_list(user_prompts)").all().some(_=>_.table==="sdk_sessions"&&_.from==="content_session_id");if(e&&r&&!o)return;let i=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='user_prompts_fts'").all().length>0,p=r?`COALESCE(up.session_db_id, (
           SELECT s.id FROM sdk_sessions s
           WHERE s.content_session_id = up.content_session_id
-          ORDER BY CASE COALESCE(NULLIF(s.platform_source, ''), '${u}')
-            WHEN '${u}' THEN 0
+          ORDER BY CASE COALESCE(NULLIF(s.platform_source, ''), '${E}')
+            WHEN '${E}' THEN 0
             ELSE 1
           END, s.id
           LIMIT 1
         ))`:`(
           SELECT s.id FROM sdk_sessions s
           WHERE s.content_session_id = up.content_session_id
-          ORDER BY CASE COALESCE(NULLIF(s.platform_source, ''), '${u}')
-            WHEN '${u}' THEN 0
+          ORDER BY CASE COALESCE(NULLIF(s.platform_source, ''), '${E}')
+            WHEN '${E}' THEN 0
             ELSE 1
           END, s.id
           LIMIT 1
-        )`;this.db.run("PRAGMA foreign_keys = OFF"),this.db.run("BEGIN TRANSACTION");try{this.rebuildUserPromptsWithSessionDbId(e,p,i),this.db.run("COMMIT")}catch(_){this.db.run("ROLLBACK");let E=_ instanceof Error?_:new Error(String(_));throw d.error("DB","Failed to rebuild user_prompts with session_db_id, rolled back",{},E),_}finally{this.db.run("PRAGMA foreign_keys = ON")}}rebuildUserPromptsWithSessionDbId(e,t,s){this.db.run("DROP TRIGGER IF EXISTS user_prompts_ai"),this.db.run("DROP TRIGGER IF EXISTS user_prompts_ad"),this.db.run("DROP TRIGGER IF EXISTS user_prompts_au"),this.db.run("DROP TABLE IF EXISTS user_prompts_new"),this.db.run(`
+        )`;this.db.run("PRAGMA foreign_keys = OFF"),this.db.run("BEGIN TRANSACTION");try{this.rebuildUserPromptsWithSessionDbId(e,p,i),this.db.run("COMMIT")}catch(_){this.db.run("ROLLBACK");let u=_ instanceof Error?_:new Error(String(_));throw d.error("DB","Failed to rebuild user_prompts with session_db_id, rolled back",{},u),_}finally{this.db.run("PRAGMA foreign_keys = ON")}}rebuildUserPromptsWithSessionDbId(e,t,s){this.db.run("DROP TRIGGER IF EXISTS user_prompts_ai"),this.db.run("DROP TRIGGER IF EXISTS user_prompts_ad"),this.db.run("DROP TRIGGER IF EXISTS user_prompts_au"),this.db.run("DROP TABLE IF EXISTS user_prompts_new"),this.db.run(`
       CREATE TABLE user_prompts_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_db_id INTEGER,
@@ -156,7 +156,26 @@ ${O.stack??""}
       WHERE tool_use_id IS NOT NULL
     `),e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(35,new Date().toISOString())}ensureSyncedAtColumns(e){let t=!1;for(let s of["observations","session_summaries","user_prompts"])this.db.query(`PRAGMA table_info(${s})`).all().some(o=>o.name==="synced_at")||(this.db.run(`ALTER TABLE ${s} ADD COLUMN synced_at INTEGER`),d.debug("DB",`Added synced_at column to ${s} table`),t=!0),this.db.run(`CREATE INDEX IF NOT EXISTS idx_${s}_unsynced ON ${s}(id) WHERE synced_at IS NULL`);t&&this.stampRowsSyncedByLegacyClient(e),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(39,new Date().toISOString())}requeuePromptCloudSyncAfterMapperFix(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(40))return;let t=this.db.prepare(`
       UPDATE user_prompts SET synced_at = NULL WHERE synced_at IS NOT NULL
-    `).run();d.info("DB","Requeued prompt cloud sync after mapper fix (v40)",{requeued:t.changes}),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(40,new Date().toISOString())}stampRowsSyncedByLegacyClient(e){if(!(0,x.existsSync)(e))return;let t;try{t=JSON.parse((0,x.readFileSync)(e,"utf-8"))}catch(n){d.warn("DB","Failed to read legacy cloud-sync state, skipping synced_at adoption",{statePath:e},n instanceof Error?n:new Error(String(n)));return}if(t===null||typeof t!="object"){d.warn("DB","Legacy cloud-sync state is not an object, skipping synced_at adoption",{statePath:e});return}let s=Date.now(),r=[["observations",t.lastId],["session_summaries",t.lastSummaryId],["user_prompts",t.lastPromptId]];for(let[n,o]of r)typeof o=="number"&&o>0&&(this.db.prepare(`UPDATE ${n} SET synced_at = ? WHERE id <= ? AND synced_at IS NULL`).run(s,o),d.debug("DB",`Stamped synced_at on ${n} rows already uploaded by the legacy cloud-sync client`,{lastSyncedId:o}))}dropDeadPendingMessagesColumns(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(31),t=this.db.query("PRAGMA table_info(pending_messages)").all(),s=new Set(t.map(o=>o.name)),n=["retry_count","failed_at_epoch","completed_at_epoch"].filter(o=>s.has(o));if(!(e&&n.length===0)){if(n.length>0){this.db.run("BEGIN TRANSACTION");try{this.db.run("DELETE FROM pending_messages WHERE status NOT IN ('pending', 'processing')");for(let o of n)this.db.run(`ALTER TABLE pending_messages DROP COLUMN ${o}`),d.debug("DB",`Dropped dead column ${o} from pending_messages`);e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(31,new Date().toISOString()),this.db.run("COMMIT")}catch(o){this.db.run("ROLLBACK"),d.warn("DB","Failed to drop dead columns from pending_messages",{},o instanceof Error?o:new Error(String(o)));return}return}e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(31,new Date().toISOString())}}initializeSchema(){this.db.run(`
+    `).run();d.info("DB","Requeued prompt cloud sync after mapper fix (v40)",{requeued:t.changes}),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(40,new Date().toISOString())}createAttentionItemsTable(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(41))return;if(this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='attention_items'").all().length>0){this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(41,new Date().toISOString());return}this.db.run(`
+      CREATE TABLE attention_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        created_at_epoch INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        blocked_on TEXT,
+        urgency TEXT NOT NULL DEFAULT 'normal',
+        source TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        resolved_at INTEGER,
+        resolved_by TEXT,
+        project TEXT,
+        agent_type TEXT,
+        agent_id TEXT,
+        memory_session_id TEXT
+      )
+    `),this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS ux_attention_items_source_ref ON attention_items(source, ref)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_attention_items_status ON attention_items(status)"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(41,new Date().toISOString())}stampRowsSyncedByLegacyClient(e){if(!(0,x.existsSync)(e))return;let t;try{t=JSON.parse((0,x.readFileSync)(e,"utf-8"))}catch(n){d.warn("DB","Failed to read legacy cloud-sync state, skipping synced_at adoption",{statePath:e},n instanceof Error?n:new Error(String(n)));return}if(t===null||typeof t!="object"){d.warn("DB","Legacy cloud-sync state is not an object, skipping synced_at adoption",{statePath:e});return}let s=Date.now(),r=[["observations",t.lastId],["session_summaries",t.lastSummaryId],["user_prompts",t.lastPromptId]];for(let[n,o]of r)typeof o=="number"&&o>0&&(this.db.prepare(`UPDATE ${n} SET synced_at = ? WHERE id <= ? AND synced_at IS NULL`).run(s,o),d.debug("DB",`Stamped synced_at on ${n} rows already uploaded by the legacy cloud-sync client`,{lastSyncedId:o}))}dropDeadPendingMessagesColumns(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(31),t=this.db.query("PRAGMA table_info(pending_messages)").all(),s=new Set(t.map(o=>o.name)),n=["retry_count","failed_at_epoch","completed_at_epoch"].filter(o=>s.has(o));if(!(e&&n.length===0)){if(n.length>0){this.db.run("BEGIN TRANSACTION");try{this.db.run("DELETE FROM pending_messages WHERE status NOT IN ('pending', 'processing')");for(let o of n)this.db.run(`ALTER TABLE pending_messages DROP COLUMN ${o}`),d.debug("DB",`Dropped dead column ${o} from pending_messages`);e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(31,new Date().toISOString()),this.db.run("COMMIT")}catch(o){this.db.run("ROLLBACK"),d.warn("DB","Failed to drop dead columns from pending_messages",{},o instanceof Error?o:new Error(String(o)));return}return}e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(31,new Date().toISOString())}}initializeSchema(){this.db.run(`
       CREATE TABLE IF NOT EXISTS schema_versions (
         id INTEGER PRIMARY KEY,
         version INTEGER UNIQUE NOT NULL,
@@ -343,7 +362,7 @@ ${O.stack??""}
         created_at_epoch INTEGER NOT NULL,
         FOREIGN KEY (session_db_id) REFERENCES sdk_sessions(id) ON DELETE CASCADE
       )
-    `),this.db.run("CREATE INDEX IF NOT EXISTS idx_pending_messages_session ON pending_messages(session_db_id)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_pending_messages_status ON pending_messages(status)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_pending_messages_claude_session ON pending_messages(content_session_id)"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(16,new Date().toISOString()),d.debug("DB","pending_messages table created successfully")}renameSessionIdColumns(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(17))return;d.debug("DB","Checking session ID columns for semantic clarity rename");let t=0,s=(r,n,o)=>{let i=this.db.query(`PRAGMA table_info(${r})`).all(),p=i.some(E=>E.name===n);return i.some(E=>E.name===o)?!1:p?(this.db.run(`ALTER TABLE ${r} RENAME COLUMN ${n} TO ${o}`),d.debug("DB",`Renamed ${r}.${n} to ${o}`),!0):(d.warn("DB",`Column ${n} not found in ${r}, skipping rename`),!1)};s("sdk_sessions","claude_session_id","content_session_id")&&t++,s("sdk_sessions","sdk_session_id","memory_session_id")&&t++,s("pending_messages","claude_session_id","content_session_id")&&t++,s("observations","sdk_session_id","memory_session_id")&&t++,s("session_summaries","sdk_session_id","memory_session_id")&&t++,s("user_prompts","claude_session_id","content_session_id")&&t++,this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(17,new Date().toISOString()),t>0?d.debug("DB",`Successfully renamed ${t} session ID columns`):d.debug("DB","No session ID column renames needed (already up to date)")}addFailedAtEpochColumn(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(20))return;this.db.query("PRAGMA table_info(pending_messages)").all().some(r=>r.name==="failed_at_epoch")||(this.db.run("ALTER TABLE pending_messages ADD COLUMN failed_at_epoch INTEGER"),d.debug("DB","Added failed_at_epoch column to pending_messages table")),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(20,new Date().toISOString())}addOnUpdateCascadeToForeignKeys(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(21))return;d.debug("DB","Adding ON UPDATE CASCADE to FK constraints on observations and session_summaries"),this.db.run("PRAGMA foreign_keys = OFF"),this.db.run("BEGIN TRANSACTION"),this.db.run("DROP TRIGGER IF EXISTS observations_ai"),this.db.run("DROP TRIGGER IF EXISTS observations_ad"),this.db.run("DROP TRIGGER IF EXISTS observations_au"),this.db.run("DROP TABLE IF EXISTS observations_new");let t=this.db.query("PRAGMA table_info(observations)").all(),s=t.some(c=>c.name==="metadata"),r=t.some(c=>c.name==="content_hash"),n=s?`,
+    `),this.db.run("CREATE INDEX IF NOT EXISTS idx_pending_messages_session ON pending_messages(session_db_id)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_pending_messages_status ON pending_messages(status)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_pending_messages_claude_session ON pending_messages(content_session_id)"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(16,new Date().toISOString()),d.debug("DB","pending_messages table created successfully")}renameSessionIdColumns(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(17))return;d.debug("DB","Checking session ID columns for semantic clarity rename");let t=0,s=(r,n,o)=>{let i=this.db.query(`PRAGMA table_info(${r})`).all(),p=i.some(u=>u.name===n);return i.some(u=>u.name===o)?!1:p?(this.db.run(`ALTER TABLE ${r} RENAME COLUMN ${n} TO ${o}`),d.debug("DB",`Renamed ${r}.${n} to ${o}`),!0):(d.warn("DB",`Column ${n} not found in ${r}, skipping rename`),!1)};s("sdk_sessions","claude_session_id","content_session_id")&&t++,s("sdk_sessions","sdk_session_id","memory_session_id")&&t++,s("pending_messages","claude_session_id","content_session_id")&&t++,s("observations","sdk_session_id","memory_session_id")&&t++,s("session_summaries","sdk_session_id","memory_session_id")&&t++,s("user_prompts","claude_session_id","content_session_id")&&t++,this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(17,new Date().toISOString()),t>0?d.debug("DB",`Successfully renamed ${t} session ID columns`):d.debug("DB","No session ID column renames needed (already up to date)")}addFailedAtEpochColumn(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(20))return;this.db.query("PRAGMA table_info(pending_messages)").all().some(r=>r.name==="failed_at_epoch")||(this.db.run("ALTER TABLE pending_messages ADD COLUMN failed_at_epoch INTEGER"),d.debug("DB","Added failed_at_epoch column to pending_messages table")),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(20,new Date().toISOString())}addOnUpdateCascadeToForeignKeys(){if(this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(21))return;d.debug("DB","Adding ON UPDATE CASCADE to FK constraints on observations and session_summaries"),this.db.run("PRAGMA foreign_keys = OFF"),this.db.run("BEGIN TRANSACTION"),this.db.run("DROP TRIGGER IF EXISTS observations_ai"),this.db.run("DROP TRIGGER IF EXISTS observations_ad"),this.db.run("DROP TRIGGER IF EXISTS observations_au"),this.db.run("DROP TABLE IF EXISTS observations_new");let t=this.db.query("PRAGMA table_info(observations)").all(),s=t.some(c=>c.name==="metadata"),r=t.some(c=>c.name==="content_hash"),n=s?`,
         metadata TEXT`:"",o=s?", metadata":"",i=r?`,
         content_hash TEXT`:"",p=r?", content_hash":"",_=`
       CREATE TABLE observations_new (
@@ -365,7 +384,7 @@ ${O.stack??""}
         created_at_epoch INTEGER NOT NULL${n}${i},
         FOREIGN KEY(memory_session_id) REFERENCES sdk_sessions(memory_session_id) ON DELETE CASCADE ON UPDATE CASCADE
       )
-    `,E=`
+    `,u=`
       INSERT INTO observations_new
       SELECT id, memory_session_id, project, text, type, title, subtitle, facts,
              narrative, concepts, files_read, files_modified, prompt_number,
@@ -393,7 +412,7 @@ ${O.stack??""}
         INSERT INTO observations_fts(rowid, title, subtitle, narrative, text, facts, concepts)
         VALUES (new.id, new.title, new.subtitle, new.narrative, new.text, new.facts, new.concepts);
       END;
-    `;this.db.run("DROP TRIGGER IF EXISTS session_summaries_ai"),this.db.run("DROP TRIGGER IF EXISTS session_summaries_ad"),this.db.run("DROP TRIGGER IF EXISTS session_summaries_au"),this.db.run("DROP TABLE IF EXISTS session_summaries_new");let R=`
+    `;this.db.run("DROP TRIGGER IF EXISTS session_summaries_ai"),this.db.run("DROP TRIGGER IF EXISTS session_summaries_ad"),this.db.run("DROP TRIGGER IF EXISTS session_summaries_au"),this.db.run("DROP TABLE IF EXISTS session_summaries_new");let N=`
       CREATE TABLE session_summaries_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         memory_session_id TEXT NOT NULL,
@@ -418,7 +437,7 @@ ${O.stack??""}
              completed, next_steps, files_read, files_edited, notes,
              prompt_number, discovery_tokens, created_at, created_at_epoch
       FROM session_summaries
-    `,N=`
+    `,R=`
       CREATE INDEX idx_session_summaries_sdk_session ON session_summaries(memory_session_id);
       CREATE INDEX idx_session_summaries_project ON session_summaries(project);
       CREATE INDEX idx_session_summaries_created ON session_summaries(created_at_epoch DESC);
@@ -439,9 +458,9 @@ ${O.stack??""}
         INSERT INTO session_summaries_fts(rowid, request, investigated, learned, completed, next_steps, notes)
         VALUES (new.id, new.request, new.investigated, new.learned, new.completed, new.next_steps, new.notes);
       END;
-    `;try{this.recreateObservationsWithCascade(_,E,h,T),this.recreateSessionSummariesWithCascade(R,O,N,m),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(21,new Date().toISOString()),this.db.run("COMMIT"),this.db.run("PRAGMA foreign_keys = ON"),d.debug("DB","Successfully added ON UPDATE CASCADE to FK constraints")}catch(c){throw this.db.run("ROLLBACK"),this.db.run("PRAGMA foreign_keys = ON"),c instanceof Error?c:new Error(String(c))}}recreateObservationsWithCascade(e,t,s,r){this.db.run(e),this.db.run(t),this.db.run("DROP TABLE observations"),this.db.run("ALTER TABLE observations_new RENAME TO observations"),this.db.run(s),this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='observations_fts'").all().length>0&&this.db.run(r)}recreateSessionSummariesWithCascade(e,t,s,r){this.db.run(e),this.db.run(t),this.db.run("DROP TABLE session_summaries"),this.db.run("ALTER TABLE session_summaries_new RENAME TO session_summaries"),this.db.run(s),this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries_fts'").all().length>0&&this.db.run(r)}addObservationContentHashColumn(){if(this.db.query("PRAGMA table_info(observations)").all().some(s=>s.name==="content_hash")){this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(22,new Date().toISOString());return}this.db.run("ALTER TABLE observations ADD COLUMN content_hash TEXT"),this.db.run("UPDATE observations SET content_hash = substr(hex(randomblob(8)), 1, 16) WHERE content_hash IS NULL"),this.db.run("CREATE INDEX IF NOT EXISTS idx_observations_content_hash ON observations(content_hash, created_at_epoch)"),d.debug("DB","Added content_hash column to observations table with backfill and index"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(22,new Date().toISOString())}addSessionCustomTitleColumn(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(23),s=this.db.query("PRAGMA table_info(sdk_sessions)").all().some(r=>r.name==="custom_title");e&&s||(s||(this.db.run("ALTER TABLE sdk_sessions ADD COLUMN custom_title TEXT"),d.debug("DB","Added custom_title column to sdk_sessions table")),e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(23,new Date().toISOString()))}addSessionPlatformSourceColumn(){let t=this.db.query("PRAGMA table_info(sdk_sessions)").all().some(o=>o.name==="platform_source"),r=this.db.query("PRAGMA index_list(sdk_sessions)").all().some(o=>o.name==="idx_sdk_sessions_platform_source");this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(24)&&t&&r||(t||(this.db.run(`ALTER TABLE sdk_sessions ADD COLUMN platform_source TEXT NOT NULL DEFAULT '${u}'`),d.debug("DB","Added platform_source column to sdk_sessions table")),this.db.run(`
+    `;try{this.recreateObservationsWithCascade(_,u,h,T),this.recreateSessionSummariesWithCascade(N,O,R,m),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(21,new Date().toISOString()),this.db.run("COMMIT"),this.db.run("PRAGMA foreign_keys = ON"),d.debug("DB","Successfully added ON UPDATE CASCADE to FK constraints")}catch(c){throw this.db.run("ROLLBACK"),this.db.run("PRAGMA foreign_keys = ON"),c instanceof Error?c:new Error(String(c))}}recreateObservationsWithCascade(e,t,s,r){this.db.run(e),this.db.run(t),this.db.run("DROP TABLE observations"),this.db.run("ALTER TABLE observations_new RENAME TO observations"),this.db.run(s),this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='observations_fts'").all().length>0&&this.db.run(r)}recreateSessionSummariesWithCascade(e,t,s,r){this.db.run(e),this.db.run(t),this.db.run("DROP TABLE session_summaries"),this.db.run("ALTER TABLE session_summaries_new RENAME TO session_summaries"),this.db.run(s),this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries_fts'").all().length>0&&this.db.run(r)}addObservationContentHashColumn(){if(this.db.query("PRAGMA table_info(observations)").all().some(s=>s.name==="content_hash")){this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(22,new Date().toISOString());return}this.db.run("ALTER TABLE observations ADD COLUMN content_hash TEXT"),this.db.run("UPDATE observations SET content_hash = substr(hex(randomblob(8)), 1, 16) WHERE content_hash IS NULL"),this.db.run("CREATE INDEX IF NOT EXISTS idx_observations_content_hash ON observations(content_hash, created_at_epoch)"),d.debug("DB","Added content_hash column to observations table with backfill and index"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(22,new Date().toISOString())}addSessionCustomTitleColumn(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(23),s=this.db.query("PRAGMA table_info(sdk_sessions)").all().some(r=>r.name==="custom_title");e&&s||(s||(this.db.run("ALTER TABLE sdk_sessions ADD COLUMN custom_title TEXT"),d.debug("DB","Added custom_title column to sdk_sessions table")),e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(23,new Date().toISOString()))}addSessionPlatformSourceColumn(){let t=this.db.query("PRAGMA table_info(sdk_sessions)").all().some(o=>o.name==="platform_source"),r=this.db.query("PRAGMA index_list(sdk_sessions)").all().some(o=>o.name==="idx_sdk_sessions_platform_source");this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(24)&&t&&r||(t||(this.db.run(`ALTER TABLE sdk_sessions ADD COLUMN platform_source TEXT NOT NULL DEFAULT '${E}'`),d.debug("DB","Added platform_source column to sdk_sessions table")),this.db.run(`
       UPDATE sdk_sessions
-      SET platform_source = '${u}'
+      SET platform_source = '${E}'
       WHERE platform_source IS NULL OR platform_source = ''
     `),r||this.db.run("CREATE INDEX IF NOT EXISTS idx_sdk_sessions_platform_source ON sdk_sessions(platform_source)"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(24,new Date().toISOString()))}addObservationModelColumns(){let e=this.db.query("PRAGMA table_info(observations)").all(),t=e.some(r=>r.name==="generated_by_model"),s=e.some(r=>r.name==="relevance_count");t&&s||(t||this.db.run("ALTER TABLE observations ADD COLUMN generated_by_model TEXT"),s||this.db.run("ALTER TABLE observations ADD COLUMN relevance_count INTEGER DEFAULT 0"),this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(26,new Date().toISOString()))}ensureMergedIntoProjectColumns(){this.db.query("PRAGMA table_info(observations)").all().some(s=>s.name==="merged_into_project")||this.db.run("ALTER TABLE observations ADD COLUMN merged_into_project TEXT"),this.db.run("CREATE INDEX IF NOT EXISTS idx_observations_merged_into ON observations(merged_into_project)"),this.db.query("PRAGMA table_info(session_summaries)").all().some(s=>s.name==="merged_into_project")||this.db.run("ALTER TABLE session_summaries ADD COLUMN merged_into_project TEXT"),this.db.run("CREATE INDEX IF NOT EXISTS idx_summaries_merged_into ON session_summaries(merged_into_project)")}addObservationSubagentColumns(){let e=this.db.prepare("SELECT version FROM schema_versions WHERE version = ?").get(27),t=this.db.query("PRAGMA table_info(observations)").all(),s=t.some(o=>o.name==="agent_type"),r=t.some(o=>o.name==="agent_id");s||this.db.run("ALTER TABLE observations ADD COLUMN agent_type TEXT"),r||this.db.run("ALTER TABLE observations ADD COLUMN agent_id TEXT"),this.db.run("CREATE INDEX IF NOT EXISTS idx_observations_agent_type ON observations(agent_type)"),this.db.run("CREATE INDEX IF NOT EXISTS idx_observations_agent_id ON observations(agent_id)");let n=this.db.query("PRAGMA table_info(pending_messages)").all();if(n.length>0){let o=n.some(p=>p.name==="agent_type"),i=n.some(p=>p.name==="agent_id");o||this.db.run("ALTER TABLE pending_messages ADD COLUMN agent_type TEXT"),i||this.db.run("ALTER TABLE pending_messages ADD COLUMN agent_id TEXT")}e||this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(27,new Date().toISOString())}ensurePendingMessagesToolUseIdColumn(){if(this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='pending_messages'").all().length===0){this.db.prepare("INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)").run(28,new Date().toISOString());return}this.db.query("PRAGMA table_info(pending_messages)").all().some(r=>r.name==="tool_use_id")||this.db.run("ALTER TABLE pending_messages ADD COLUMN tool_use_id TEXT"),this.db.run("BEGIN TRANSACTION");try{this.dedupePendingMessagesByToolUseId(),this.db.run("COMMIT")}catch(r){this.db.run("ROLLBACK");let n=r instanceof Error?r:new Error(String(r));throw d.error("DB","Failed to de-dupe pending_messages by tool_use_id, rolled back",{},n),r}}dedupePendingMessagesByToolUseId(){this.db.run(`
       DELETE FROM pending_messages
@@ -511,28 +530,28 @@ ${O.stack??""}
       FROM sdk_sessions
       WHERE project IS NOT NULL AND project != ''
         AND project != ?
-    `,r=[X];return t&&(s+=" AND COALESCE(platform_source, ?) = ?",r.push(u,t)),s+=" ORDER BY project ASC",this.db.prepare(s).all(...r).map(o=>o.project)}getProjectCatalog(){let e=this.db.prepare(`
+    `,r=[P];return t&&(s+=" AND COALESCE(platform_source, ?) = ?",r.push(E,t)),s+=" ORDER BY project ASC",this.db.prepare(s).all(...r).map(o=>o.project)}getProjectCatalog(){let e=this.db.prepare(`
       SELECT
-        COALESCE(platform_source, '${u}') as platform_source,
+        COALESCE(platform_source, '${E}') as platform_source,
         project,
         MAX(started_at_epoch) as latest_epoch
       FROM sdk_sessions
       WHERE project IS NOT NULL AND project != ''
         AND project != ?
-      GROUP BY COALESCE(platform_source, '${u}'), project
+      GROUP BY COALESCE(platform_source, '${E}'), project
       ORDER BY latest_epoch DESC
-    `).all(X),t=[],s=new Set,r={};for(let o of e){let i=L(o.platform_source);r[i]||(r[i]=[]),r[i].includes(o.project)||r[i].push(o.project),s.has(o.project)||(s.add(o.project),t.push(o.project))}let n=Z(Object.keys(r));return{projects:t,sources:n,projectsBySource:Object.fromEntries(n.map(o=>[o,r[o]||[]]))}}getLatestUserPrompt(e,t){let s=this.resolvePromptSessionDbId(e,t),r=s!==null?"up.session_db_id = ?":"up.content_session_id = ?",n=s!==null?s:e;return this.db.prepare(`
+    `).all(P),t=[],s=new Set,r={};for(let o of e){let i=L(o.platform_source);r[i]||(r[i]=[]),r[i].includes(o.project)||r[i].push(o.project),s.has(o.project)||(s.add(o.project),t.push(o.project))}let n=Z(Object.keys(r));return{projects:t,sources:n,projectsBySource:Object.fromEntries(n.map(o=>[o,r[o]||[]]))}}getLatestUserPrompt(e,t){let s=this.resolvePromptSessionDbId(e,t),r=s!==null?"up.session_db_id = ?":"up.content_session_id = ?",n=s!==null?s:e;return this.db.prepare(`
       SELECT
         up.*,
         s.memory_session_id,
         s.project,
-        COALESCE(s.platform_source, '${u}') as platform_source
+        COALESCE(s.platform_source, '${E}') as platform_source
       FROM user_prompts up
       JOIN sdk_sessions s ON up.session_db_id = s.id
       WHERE ${r}
       ORDER BY up.created_at_epoch DESC
       LIMIT 1
-    `).get(n)}findRecentDuplicateUserPrompt(e,t,s,r){return ee(this.db,e,w(t),s,this.resolvePromptSessionDbId(e,r)??void 0)}getRecentSessionsWithStatus(e,t=3,s){let r=[e],n="";return s&&(n=`AND COALESCE(NULLIF(s.platform_source, ''), '${u}') = ?`,r.push(L(s))),r.push(t),this.db.prepare(`
+    `).get(n)}findRecentDuplicateUserPrompt(e,t,s,r){return ee(this.db,e,w(t),s,this.resolvePromptSessionDbId(e,r)??void 0)}getRecentSessionsWithStatus(e,t=3,s){let r=[e],n="";return s&&(n=`AND COALESCE(NULLIF(s.platform_source, ''), '${E}') = ?`,r.push(L(s))),r.push(t),this.db.prepare(`
       SELECT * FROM (
         SELECT
           s.memory_session_id,
@@ -555,7 +574,7 @@ ${O.stack??""}
           SELECT 1
           FROM sdk_sessions s
           WHERE s.memory_session_id = observations.memory_session_id
-            AND COALESCE(NULLIF(s.platform_source, ''), '${u}') = ?
+            AND COALESCE(NULLIF(s.platform_source, ''), '${E}') = ?
         )
       `,s.push(L(t))),this.db.prepare(`
       SELECT title, subtitle, type, prompt_number
@@ -568,24 +587,24 @@ ${O.stack??""}
       FROM observations o
       LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
       WHERE o.id = ?
-        AND COALESCE(NULLIF(s.platform_source, ''), '${u}') = ?
+        AND COALESCE(NULLIF(s.platform_source, ''), '${E}') = ?
     `).get(e,L(t))||null:this.db.prepare(`
         SELECT *
         FROM observations
         WHERE id = ?
-      `).get(e)||null}getObservationsByIds(e,t={}){if(e.length===0)return[];let{orderBy:s="date_desc",limit:r,project:n,platformSource:o,type:i,concepts:p,files:_}=t,E=s==="relevance",h=E?"":`ORDER BY o.created_at_epoch ${s==="date_asc"?"ASC":"DESC"}`,T=r&&!E?`LIMIT ${r}`:"",R=e.map(()=>"?").join(","),O=[...e],N=[];if(n&&(N.push("o.project = ?"),O.push(n)),o&&(N.push(`COALESCE(NULLIF(s.platform_source, ''), '${u}') = ?`),O.push(L(o))),i)if(Array.isArray(i)){let g=i.map(()=>"?").join(",");N.push(`o.type IN (${g})`),O.push(...i)}else N.push("o.type = ?"),O.push(i);if(p){let g=Array.isArray(p)?p:[p],S=g.map(()=>"EXISTS (SELECT 1 FROM json_each(o.concepts) WHERE value = ?)");O.push(...g),N.push(`(${S.join(" OR ")})`)}if(_){let g=Array.isArray(_)?_:[_],S=g.map(()=>"(EXISTS (SELECT 1 FROM json_each(o.files_read) WHERE value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(o.files_modified) WHERE value LIKE ?))");g.forEach(A=>{O.push(`%${A}%`,`%${A}%`)}),N.push(`(${S.join(" OR ")})`)}let m=N.length>0?`WHERE o.id IN (${R}) AND ${N.join(" AND ")}`:`WHERE o.id IN (${R})`,f=this.db.prepare(`
+      `).get(e)||null}getObservationsByIds(e,t={}){if(e.length===0)return[];let{orderBy:s="date_desc",limit:r,project:n,platformSource:o,type:i,concepts:p,files:_}=t,u=s==="relevance",h=u?"":`ORDER BY o.created_at_epoch ${s==="date_asc"?"ASC":"DESC"}`,T=r&&!u?`LIMIT ${r}`:"",N=e.map(()=>"?").join(","),O=[...e],R=[];if(n&&(R.push("o.project = ?"),O.push(n)),o&&(R.push(`COALESCE(NULLIF(s.platform_source, ''), '${E}') = ?`),O.push(L(o))),i)if(Array.isArray(i)){let g=i.map(()=>"?").join(",");R.push(`o.type IN (${g})`),O.push(...i)}else R.push("o.type = ?"),O.push(i);if(p){let g=Array.isArray(p)?p:[p],S=g.map(()=>"EXISTS (SELECT 1 FROM json_each(o.concepts) WHERE value = ?)");O.push(...g),R.push(`(${S.join(" OR ")})`)}if(_){let g=Array.isArray(_)?_:[_],S=g.map(()=>"(EXISTS (SELECT 1 FROM json_each(o.files_read) WHERE value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(o.files_modified) WHERE value LIKE ?))");g.forEach(A=>{O.push(`%${A}%`,`%${A}%`)}),R.push(`(${S.join(" OR ")})`)}let m=R.length>0?`WHERE o.id IN (${N}) AND ${R.join(" AND ")}`:`WHERE o.id IN (${N})`,f=this.db.prepare(`
       SELECT o.*
       FROM observations o
       LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
       ${m}
       ${h}
       ${T}
-    `).all(...O);if(!E)return f;let v=new Map(f.map(g=>[g.id,g])),b=e.map(g=>v.get(g)).filter(g=>!!g);return r?b.slice(0,r):b}getSummaryForSession(e,t){let s=[e],r="";return t&&(r=`
+    `).all(...O);if(!u)return f;let v=new Map(f.map(g=>[g.id,g])),b=e.map(g=>v.get(g)).filter(g=>!!g);return r?b.slice(0,r):b}getSummaryForSession(e,t){let s=[e],r="";return t&&(r=`
         AND EXISTS (
           SELECT 1
           FROM sdk_sessions sdk
           WHERE sdk.memory_session_id = session_summaries.memory_session_id
-            AND COALESCE(NULLIF(sdk.platform_source, ''), '${u}') = ?
+            AND COALESCE(NULLIF(sdk.platform_source, ''), '${E}') = ?
         )
       `,s.push(L(t))),this.db.prepare(`
       SELECT
@@ -599,14 +618,14 @@ ${O.stack??""}
       LIMIT 1
     `).get(...s)||null}getSessionById(e){return this.db.prepare(`
       SELECT id, content_session_id, memory_session_id, project,
-             COALESCE(platform_source, '${u}') as platform_source,
+             COALESCE(platform_source, '${E}') as platform_source,
              user_prompt, custom_title, status
       FROM sdk_sessions
       WHERE id = ?
       LIMIT 1
     `).get(e)||null}getSdkSessionsBySessionIds(e){if(e.length===0)return[];let t=e.map(()=>"?").join(",");return this.db.prepare(`
       SELECT id, content_session_id, memory_session_id, project,
-             COALESCE(platform_source, '${u}') as platform_source,
+             COALESCE(platform_source, '${E}') as platform_source,
              user_prompt, custom_title,
              started_at, started_at_epoch, completed_at, completed_at_epoch, status
       FROM sdk_sessions
@@ -616,18 +635,18 @@ ${O.stack??""}
         SELECT COUNT(*) as count FROM user_prompts WHERE session_db_id = ?
       `).get(s).count:this.db.prepare(`
       SELECT COUNT(*) as count FROM user_prompts WHERE content_session_id = ?
-    `).get(e).count}createSDKSession(e,t,s,r,n){let o=new Date,i=o.getTime(),p=n?L(n):u,_=w(s),E=this.db.prepare(`
+    `).get(e).count}createSDKSession(e,t,s,r,n){let o=new Date,i=o.getTime(),p=n?L(n):E,_=w(s),u=this.db.prepare(`
       SELECT id, platform_source
       FROM sdk_sessions
       WHERE COALESCE(NULLIF(platform_source, ''), ?) = ?
         AND content_session_id = ?
-    `).get(u,p,e);if(E)return t&&this.db.prepare(`
+    `).get(E,p,e);if(u)return t&&this.db.prepare(`
           UPDATE sdk_sessions SET project = ?
           WHERE id = ? AND (project IS NULL OR project = '')
-        `).run(t,E.id),r&&this.db.prepare(`
+        `).run(t,u.id),r&&this.db.prepare(`
           UPDATE sdk_sessions SET custom_title = ?
           WHERE id = ? AND custom_title IS NULL
-        `).run(r,E.id),E.id;let h=this.db.prepare(`
+        `).run(r,u.id),u.id;let h=this.db.prepare(`
       INSERT INTO sdk_sessions
       (content_session_id, memory_session_id, project, platform_source, user_prompt, custom_title, started_at, started_at_epoch, status)
       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'active')
@@ -645,12 +664,12 @@ ${O.stack??""}
       FROM user_prompts
       WHERE content_session_id = ? AND prompt_number = ?
       LIMIT 1
-    `).get(e,t)?.prompt_text??null}storeObservation(e,t,s,r,n=0,o,i){let p=this.storeObservations(e,t,[s],null,r,n,o,i);return{id:p.observationIds[0],createdAtEpoch:p.createdAtEpoch}}storeSummary(e,t,s,r,n=0,o){let i=o??Date.now(),p=new Date(i).toISOString(),E=this.db.prepare(`
+    `).get(e,t)?.prompt_text??null}storeObservation(e,t,s,r,n=0,o,i){let p=this.storeObservations(e,t,[s],null,r,n,o,i);return{id:p.observationIds[0],createdAtEpoch:p.createdAtEpoch}}storeSummary(e,t,s,r,n=0,o){let i=o??Date.now(),p=new Date(i).toISOString(),u=this.db.prepare(`
       INSERT INTO session_summaries
       (memory_session_id, project, request, investigated, learned, completed,
        next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(e,t,s.request,s.investigated,s.learned,s.completed,s.next_steps,s.notes,r||null,n,p,i);return{id:Number(E.lastInsertRowid),createdAtEpoch:i}}storeObservations(e,t,s,r,n,o=0,i,p){let _=i??Date.now(),E=new Date(_).toISOString();return this.db.transaction(()=>{let T=[],R=this.db.prepare(`
+    `).run(e,t,s.request,s.investigated,s.learned,s.completed,s.next_steps,s.notes,r||null,n,p,i);return{id:Number(u.lastInsertRowid),createdAtEpoch:i}}storeObservations(e,t,s,r,n,o=0,i,p){let _=i??Date.now(),u=new Date(_).toISOString();return this.db.transaction(()=>{let T=[],N=this.db.prepare(`
         INSERT INTO observations
         (memory_session_id, project, type, title, subtitle, facts, narrative, concepts,
          files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch,
@@ -658,30 +677,30 @@ ${O.stack??""}
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(memory_session_id, content_hash) DO NOTHING
         RETURNING id
-      `),O=this.db.prepare("SELECT id FROM observations WHERE memory_session_id = ? AND content_hash = ?");for(let m of s){let c=z(e,m.title,m.narrative),f=R.get(e,t,m.type,m.title,m.subtitle,JSON.stringify(m.facts),m.narrative,JSON.stringify(m.concepts),JSON.stringify(m.files_read),JSON.stringify(m.files_modified),n||null,o,m.agent_type??null,m.agent_id??null,c,E,_,p||null,m.metadata??null);if(f){T.push(f.id);continue}let v=O.get(e,c);if(!v)throw new Error(`storeObservations: ON CONFLICT without existing row for content_hash=${c}`);T.push(v.id)}let N=null;if(r){let c=this.db.prepare(`
+      `),O=this.db.prepare("SELECT id FROM observations WHERE memory_session_id = ? AND content_hash = ?");for(let m of s){let c=z(e,m.title,m.narrative),f=N.get(e,t,m.type,m.title,m.subtitle,JSON.stringify(m.facts),m.narrative,JSON.stringify(m.concepts),JSON.stringify(m.files_read),JSON.stringify(m.files_modified),n||null,o,m.agent_type??null,m.agent_id??null,c,u,_,p||null,m.metadata??null);if(f){T.push(f.id);continue}let v=O.get(e,c);if(!v)throw new Error(`storeObservations: ON CONFLICT without existing row for content_hash=${c}`);T.push(v.id)}let R=null;if(r){let c=this.db.prepare(`
           INSERT INTO session_summaries
           (memory_session_id, project, request, investigated, learned, completed,
            next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(e,t,r.request,r.investigated,r.learned,r.completed,r.next_steps,r.notes,n||null,o,E,_);N=Number(c.lastInsertRowid)}return{observationIds:T,summaryId:N,createdAtEpoch:_}})()}getSessionSummariesByIds(e,t={}){if(e.length===0)return[];let{orderBy:s="date_desc",limit:r,project:n,platformSource:o}=t,i=s==="relevance",p=i?"":`ORDER BY ss.created_at_epoch ${s==="date_asc"?"ASC":"DESC"}`,_=r&&!i?`LIMIT ${r}`:"",E=e.map(()=>"?").join(","),h=[...e],T=[];n&&(T.push("ss.project = ?"),h.push(n)),o&&(T.push(`COALESCE(NULLIF(s.platform_source, ''), '${u}') = ?`),h.push(L(o)));let R=T.length>0?`AND ${T.join(" AND ")}`:"",N=this.db.prepare(`
+        `).run(e,t,r.request,r.investigated,r.learned,r.completed,r.next_steps,r.notes,n||null,o,u,_);R=Number(c.lastInsertRowid)}return{observationIds:T,summaryId:R,createdAtEpoch:_}})()}getSessionSummariesByIds(e,t={}){if(e.length===0)return[];let{orderBy:s="date_desc",limit:r,project:n,platformSource:o}=t,i=s==="relevance",p=i?"":`ORDER BY ss.created_at_epoch ${s==="date_asc"?"ASC":"DESC"}`,_=r&&!i?`LIMIT ${r}`:"",u=e.map(()=>"?").join(","),h=[...e],T=[];n&&(T.push("ss.project = ?"),h.push(n)),o&&(T.push(`COALESCE(NULLIF(s.platform_source, ''), '${E}') = ?`),h.push(L(o)));let N=T.length>0?`AND ${T.join(" AND ")}`:"",R=this.db.prepare(`
       SELECT ss.*
       FROM session_summaries ss
       LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
-      WHERE ss.id IN (${E}) ${R}
+      WHERE ss.id IN (${u}) ${N}
       ${p}
       ${_}
-    `).all(...h);if(!i)return N;let m=new Map(N.map(f=>[f.id,f])),c=e.map(f=>m.get(f)).filter(f=>!!f);return r?c.slice(0,r):c}getUserPromptsByIds(e,t={}){if(e.length===0)return[];let{orderBy:s="date_desc",limit:r,project:n,platformSource:o}=t,i=s==="relevance",p=i?"":`ORDER BY up.created_at_epoch ${s==="date_asc"?"ASC":"DESC"}`,_=r?`LIMIT ${r}`:"",E=e.map(()=>"?").join(","),h=[...e],T=[];n&&(T.push("s.project = ?"),h.push(n)),o&&(T.push(`COALESCE(NULLIF(s.platform_source, ''), '${u}') = ?`),h.push(L(o)));let R=T.length>0?`AND ${T.join(" AND ")}`:"",N=this.db.prepare(`
+    `).all(...h);if(!i)return R;let m=new Map(R.map(f=>[f.id,f])),c=e.map(f=>m.get(f)).filter(f=>!!f);return r?c.slice(0,r):c}getUserPromptsByIds(e,t={}){if(e.length===0)return[];let{orderBy:s="date_desc",limit:r,project:n,platformSource:o}=t,i=s==="relevance",p=i?"":`ORDER BY up.created_at_epoch ${s==="date_asc"?"ASC":"DESC"}`,_=r?`LIMIT ${r}`:"",u=e.map(()=>"?").join(","),h=[...e],T=[];n&&(T.push("s.project = ?"),h.push(n)),o&&(T.push(`COALESCE(NULLIF(s.platform_source, ''), '${E}') = ?`),h.push(L(o)));let N=T.length>0?`AND ${T.join(" AND ")}`:"",R=this.db.prepare(`
       SELECT
         up.*,
         s.project,
         s.memory_session_id,
-        COALESCE(NULLIF(s.platform_source, ''), '${u}') as platform_source
+        COALESCE(NULLIF(s.platform_source, ''), '${E}') as platform_source
       FROM user_prompts up
       JOIN sdk_sessions s ON up.session_db_id = s.id
-      WHERE up.id IN (${E}) ${R}
+      WHERE up.id IN (${u}) ${N}
       ${p}
       ${_}
-    `).all(...h);if(!i)return N;let m=new Map(N.map(c=>[c.id,c]));return e.map(c=>m.get(c)).filter(c=>!!c)}getTimelineAroundTimestamp(e,t=10,s=10,r,n){return this.getTimelineAroundObservation(null,e,t,s,r,n)}getTimelineAroundObservation(e,t,s=10,r=10,n,o){let i=o?L(o):void 0,p=(b,g)=>{let S=[],A=[];return n&&(S.push(`${b}.project = ?`),A.push(n)),i&&(S.push(`COALESCE(NULLIF(${g}.platform_source, ''), '${u}') = ?`),A.push(i)),{clause:S.length>0?`AND ${S.join(" AND ")}`:"",params:A}},_=p("o","src"),E=p("ss","src"),h=p("s","s"),T,R;if(e!==null){let b=`
+    `).all(...h);if(!i)return R;let m=new Map(R.map(c=>[c.id,c]));return e.map(c=>m.get(c)).filter(c=>!!c)}getTimelineAroundTimestamp(e,t=10,s=10,r,n){return this.getTimelineAroundObservation(null,e,t,s,r,n)}getTimelineAroundObservation(e,t,s=10,r=10,n,o){let i=o?L(o):void 0,p=(b,g)=>{let S=[],A=[];return n&&(S.push(`${b}.project = ?`),A.push(n)),i&&(S.push(`COALESCE(NULLIF(${g}.platform_source, ''), '${E}') = ?`),A.push(i)),{clause:S.length>0?`AND ${S.join(" AND ")}`:"",params:A}},_=p("o","src"),u=p("ss","src"),h=p("s","s"),T,N;if(e!==null){let b=`
         SELECT o.id, o.created_at_epoch
         FROM observations o
         LEFT JOIN sdk_sessions src ON src.memory_session_id = o.memory_session_id
@@ -695,7 +714,7 @@ ${O.stack??""}
         WHERE o.id >= ? ${_.clause}
         ORDER BY o.id ASC
         LIMIT ?
-      `;try{let S=this.db.prepare(b).all(e,..._.params,s+1),A=this.db.prepare(g).all(e,..._.params,r+1);if(S.length===0&&A.length===0)return{observations:[],sessions:[],prompts:[]};T=S.length>0?S[S.length-1].created_at_epoch:t,R=A.length>0?A[A.length-1].created_at_epoch:t}catch(S){return S instanceof Error?d.error("DB","Error getting boundary observations",{project:n},S):d.error("DB","Error getting boundary observations with non-Error",{},new Error(String(S))),{observations:[],sessions:[],prompts:[]}}}else{let b=`
+      `;try{let S=this.db.prepare(b).all(e,..._.params,s+1),A=this.db.prepare(g).all(e,..._.params,r+1);if(S.length===0&&A.length===0)return{observations:[],sessions:[],prompts:[]};T=S.length>0?S[S.length-1].created_at_epoch:t,N=A.length>0?A[A.length-1].created_at_epoch:t}catch(S){return S instanceof Error?d.error("DB","Error getting boundary observations",{project:n},S):d.error("DB","Error getting boundary observations with non-Error",{},new Error(String(S))),{observations:[],sessions:[],prompts:[]}}}else{let b=`
         SELECT o.created_at_epoch
         FROM observations o
         LEFT JOIN sdk_sessions src ON src.memory_session_id = o.memory_session_id
@@ -709,28 +728,28 @@ ${O.stack??""}
         WHERE o.created_at_epoch >= ? ${_.clause}
         ORDER BY o.created_at_epoch ASC
         LIMIT ?
-      `;try{let S=this.db.prepare(b).all(t,..._.params,s),A=this.db.prepare(g).all(t,..._.params,r+1);if(S.length===0&&A.length===0)return{observations:[],sessions:[],prompts:[]};T=S.length>0?S[S.length-1].created_at_epoch:t,R=A.length>0?A[A.length-1].created_at_epoch:t}catch(S){return S instanceof Error?d.error("DB","Error getting boundary timestamps",{project:n},S):d.error("DB","Error getting boundary timestamps with non-Error",{},new Error(String(S))),{observations:[],sessions:[],prompts:[]}}}let O=`
+      `;try{let S=this.db.prepare(b).all(t,..._.params,s),A=this.db.prepare(g).all(t,..._.params,r+1);if(S.length===0&&A.length===0)return{observations:[],sessions:[],prompts:[]};T=S.length>0?S[S.length-1].created_at_epoch:t,N=A.length>0?A[A.length-1].created_at_epoch:t}catch(S){return S instanceof Error?d.error("DB","Error getting boundary timestamps",{project:n},S):d.error("DB","Error getting boundary timestamps with non-Error",{},new Error(String(S))),{observations:[],sessions:[],prompts:[]}}}let O=`
       SELECT o.*
       FROM observations o
       LEFT JOIN sdk_sessions src ON src.memory_session_id = o.memory_session_id
       WHERE o.created_at_epoch >= ? AND o.created_at_epoch <= ? ${_.clause}
       ORDER BY o.created_at_epoch ASC
-    `,N=`
+    `,R=`
       SELECT ss.*
       FROM session_summaries ss
       LEFT JOIN sdk_sessions src ON src.memory_session_id = ss.memory_session_id
-      WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch <= ? ${E.clause}
+      WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch <= ? ${u.clause}
       ORDER BY ss.created_at_epoch ASC
     `,m=`
-      SELECT up.*, s.project, s.memory_session_id, COALESCE(NULLIF(s.platform_source, ''), '${u}') as platform_source
+      SELECT up.*, s.project, s.memory_session_id, COALESCE(NULLIF(s.platform_source, ''), '${E}') as platform_source
       FROM user_prompts up
       JOIN sdk_sessions s ON up.session_db_id = s.id
       WHERE up.created_at_epoch >= ? AND up.created_at_epoch <= ? ${h.clause}
       ORDER BY up.created_at_epoch ASC
-    `,c=this.db.prepare(O).all(T,R,..._.params),f=this.db.prepare(N).all(T,R,...E.params),v=this.db.prepare(m).all(T,R,...h.params);return{observations:c,sessions:f.map(b=>({id:b.id,memory_session_id:b.memory_session_id,project:b.project,request:b.request,completed:b.completed,next_steps:b.next_steps,created_at:b.created_at,created_at_epoch:b.created_at_epoch})),prompts:v.map(b=>({id:b.id,content_session_id:b.content_session_id,prompt_number:b.prompt_number,prompt_text:b.prompt_text,project:b.project,platform_source:b.platform_source,created_at:b.created_at,created_at_epoch:b.created_at_epoch}))}}getOrCreateManualSession(e){let t=`manual-${e}`,s=`manual-content-${e}`;if(this.db.prepare("SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id = ?").get(t))return t;let n=new Date;return this.db.prepare(`
+    `,c=this.db.prepare(O).all(T,N,..._.params),f=this.db.prepare(R).all(T,N,...u.params),v=this.db.prepare(m).all(T,N,...h.params);return{observations:c,sessions:f.map(b=>({id:b.id,memory_session_id:b.memory_session_id,project:b.project,request:b.request,completed:b.completed,next_steps:b.next_steps,created_at:b.created_at,created_at_epoch:b.created_at_epoch})),prompts:v.map(b=>({id:b.id,content_session_id:b.content_session_id,prompt_number:b.prompt_number,prompt_text:b.prompt_text,project:b.project,platform_source:b.platform_source,created_at:b.created_at,created_at_epoch:b.created_at_epoch}))}}getOrCreateManualSession(e){let t=`manual-${e}`,s=`manual-content-${e}`;if(this.db.prepare("SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id = ?").get(t))return t;let n=new Date;return this.db.prepare(`
       INSERT INTO sdk_sessions (memory_session_id, content_session_id, project, platform_source, started_at, started_at_epoch, status)
       VALUES (?, ?, ?, ?, ?, ?, 'active')
-    `).run(t,s,e,u,n.toISOString(),n.getTime()),d.info("SESSION","Created manual session",{memorySessionId:t,project:e}),t}close(){this.db.close()}importSdkSession(e){let t=L(e.platform_source),s=this.db.prepare(`SELECT id FROM sdk_sessions
+    `).run(t,s,e,E,n.toISOString(),n.getTime()),d.info("SESSION","Created manual session",{memorySessionId:t,project:e}),t}close(){this.db.close()}importSdkSession(e){let t=L(e.platform_source),s=this.db.prepare(`SELECT id FROM sdk_sessions
        WHERE platform_source = ? AND content_session_id = ?`).get(t,e.content_session_id);return s?{imported:!1,id:s.id}:{imported:!0,id:this.db.prepare(`
       INSERT INTO sdk_sessions (
         content_session_id, memory_session_id, project, platform_source, user_prompt,
@@ -753,7 +772,7 @@ ${O.stack??""}
         created_at, created_at_epoch
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(e.memory_session_id,e.project,e.text,e.type,e.title,e.subtitle,e.facts,e.narrative,e.concepts,e.files_read,e.files_modified,e.prompt_number,e.discovery_tokens||0,e.agent_type??null,e.agent_id??null,e.created_at,e.created_at_epoch).lastInsertRowid}}rebuildObservationsFTSIndex(){this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='observations_fts'").all().length>0&&this.db.run("INSERT INTO observations_fts(observations_fts) VALUES('rebuild')")}importUserPrompt(e){let t=null,s=e.platform_source?L(e.platform_source):void 0;if(typeof e.session_db_id=="number"){let i=this.db.prepare(`
-        SELECT id, content_session_id, COALESCE(NULLIF(platform_source, ''), '${u}') as platform_source
+        SELECT id, content_session_id, COALESCE(NULLIF(platform_source, ''), '${E}') as platform_source
         FROM sdk_sessions
         WHERE id = ?
         LIMIT 1
