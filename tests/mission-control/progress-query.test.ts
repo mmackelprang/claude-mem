@@ -1,7 +1,15 @@
 // tests/mission-control/progress-query.test.ts
 import { describe, it, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { queryProgress } from '../../src/services/mission-control/ProgressQuery.js';
+import { queryProgress, queryTeamSessions } from '../../src/services/mission-control/ProgressQuery.js';
+import { SessionStore } from '../../src/services/sqlite/SessionStore.js';
+
+function makeProgressDb() {
+  const db = new Database(':memory:');
+  new SessionStore(db);
+  db.run('PRAGMA foreign_keys = OFF');
+  return db;
+}
 
 function seed(db: Database): void {
   db.run(`CREATE TABLE observations (
@@ -44,5 +52,56 @@ describe('queryProgress', () => {
     const db = new Database(':memory:');
     seed(db);
     expect(queryProgress(db, { by: 'human' })).toEqual([]);
+  });
+});
+
+function seedObs(db: any, rows: Array<{ session: string; project: string; agentType: string; type: string; epoch: number }>) {
+  const stmt = db.prepare(
+    `INSERT INTO observations
+       (memory_session_id, project, text, type, agent_type, created_at, created_at_epoch)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const r of rows) {
+    stmt.run(r.session, r.project, `obs ${r.type}`, r.type, r.agentType, new Date(r.epoch).toISOString(), r.epoch);
+  }
+}
+
+describe('ProgressQuery — project grouping + sessions', () => {
+  it('carries project on each bucket and preserves byType', () => {
+    const db = makeProgressDb();
+    seedObs(db, [
+      { session: 's1', project: 'claude-mem', agentType: 'builder', type: 'feature', epoch: 2000 },
+      { session: 's1', project: 'claude-mem', agentType: 'builder', type: 'bugfix', epoch: 2001 },
+      { session: 's2', project: 'other', agentType: 'planner', type: 'decision', epoch: 2002 },
+    ]);
+    const buckets = queryProgress(db, {});
+    expect(buckets.every(b => 'project' in b)).toBe(true);
+    const cm = buckets.filter(b => b.project === 'claude-mem');
+    expect(cm.length).toBeGreaterThan(0);
+    const merged = cm.reduce((acc, b) => { for (const [k, v] of Object.entries(b.byType)) acc[k] = (acc[k] ?? 0) + v; return acc; }, {} as Record<string, number>);
+    expect(merged.feature).toBe(1);
+    expect(merged.bugfix).toBe(1);
+  });
+
+  it('counts DISTINCT sessions per (project, agentType), not per type', () => {
+    const db = makeProgressDb();
+    seedObs(db, [
+      { session: 's1', project: 'claude-mem', agentType: 'builder', type: 'feature', epoch: 3000 },
+      { session: 's1', project: 'claude-mem', agentType: 'builder', type: 'bugfix', epoch: 3001 }, // same session, 2nd type
+      { session: 's2', project: 'claude-mem', agentType: 'builder', type: 'feature', epoch: 3002 },
+    ]);
+    const teams = queryTeamSessions(db, {});
+    const builder = teams.find(t => t.project === 'claude-mem' && t.agentType === 'builder')!;
+    expect(builder.sessions).toBe(2); // s1, s2 — NOT 3 (the two types of s1 collapse)
+  });
+
+  it('honors sinceEpoch on both queries', () => {
+    const db = makeProgressDb();
+    seedObs(db, [
+      { session: 'old', project: 'p', agentType: 'builder', type: 'feature', epoch: 1000 },
+      { session: 'new', project: 'p', agentType: 'builder', type: 'feature', epoch: 5000 },
+    ]);
+    expect(queryTeamSessions(db, { sinceEpoch: 4000 })[0].sessions).toBe(1);
+    expect(queryProgress(db, { sinceEpoch: 4000 }).length).toBe(1);
   });
 });
