@@ -61,4 +61,34 @@ describe('MissionControlRoutes', () => {
     expect(Array.isArray(body.items)).toBe(true);
     expect(body.items.length).toBe(1);
   });
+
+  it('velocity returns a deferred state (does not read a repo-root file) in Phase 1', () => {
+    // Velocity is gated on resolveRepoRoot() (#24). It must never crash or read
+    // getPackageRoot()/docs/BUILDER_QUEUE.md — just report deferred.
+    const app = makeMockApp();
+    const routes = new MissionControlRoutes(makeDbManager() as any, {
+      ghAvailable: () => false, listOpenPrs: () => [], listMergeCommits: () => [],
+    });
+    routes.setupRoutes(app as any);
+    const body = app.invoke('/api/mission-control/velocity', { query: {} }) as {
+      deferred?: boolean; reason?: string; openCount: number | null; shippedByWeek: unknown[];
+    };
+    expect(body.deferred).toBe(true);
+    expect(typeof body.reason).toBe('string');
+    expect(body.openCount).toBeNull();
+    expect(Array.isArray(body.shippedByWeek)).toBe(true);
+  });
+
+  it('attention reports specMiningDeferred so the pane can label the gated sources', () => {
+    const app = makeMockApp();
+    const routes = new MissionControlRoutes(makeDbManager() as any, {
+      ghAvailable: () => false, listOpenPrs: () => [], listMergeCommits: () => [],
+    });
+    routes.setupRoutes(app as any);
+    const body = app.invoke('/api/mission-control/attention', { query: {} }) as {
+      items: unknown[]; ghAvailable: boolean; specMiningDeferred: boolean;
+    };
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.specMiningDeferred).toBe(true); // gated off in Phase 1 (#24)
+  });
 });

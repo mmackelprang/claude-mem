@@ -12,6 +12,15 @@ export type { AttentionItem } from './attention-items.js';
 export interface MineOptions {
   specFiles?: { path: string; content: string }[];
   now?: number;
+  /**
+   * Whether the filesystem-backed spec/question sources are active. Defaults to
+   * `true`. When `false` (Phase 1 repo-root gate, #24) the spec-review and
+   * doc-Open-Questions branches are skipped ENTIRELY — no mining AND no
+   * auto-resolve — so a gated (unchecked) pass never wipes previously-open
+   * `spec:`/`question:` items. Mirrors the `if (ghAvailable)` guard used for PR
+   * reviews: only auto-resolve against a signal we actually observed.
+   */
+  specMiningEnabled?: boolean;
 }
 
 export interface MineResult {
@@ -64,6 +73,7 @@ export function runAttentionMine(
   options: MineOptions = {}
 ): MineResult {
   const now = options.now ?? Date.now();
+  const specMiningEnabled = options.specMiningEnabled ?? true;
   let upserted = 0;
   let resolved = 0;
 
@@ -82,27 +92,32 @@ export function runAttentionMine(
     resolved += resolvePrefixed(db, 'review', 'pr:', liveRefs, now);
   }
 
-  // --- Reviews: Proposed specs ---
-  const specFiles = options.specFiles ?? [];
-  const liveSpecRefs = new Set<string>();
-  for (const file of specFiles) {
-    const proposed = extractProposedSpec(file.path, file.content);
-    if (proposed) {
-      liveSpecRefs.add(proposed.ref);
-      if (upsertMinedItem(db, { type: 'review', summary: proposed.summary, source: 'mine', ref: proposed.ref, now })) upserted++;
+  // --- Reviews: Proposed specs + Questions: doc Open-Questions sections ---
+  // Both read repo `docs/` (via loadSpecFiles), gated on repo-root availability
+  // (#24). Skip the WHOLE block when disabled — mining AND auto-resolve — so a
+  // gated pass (specFiles=[], nothing observed) never wipes previously-open
+  // spec:/question: items. Same discipline as the `if (ghAvailable)` block above.
+  if (specMiningEnabled) {
+    const specFiles = options.specFiles ?? [];
+    const liveSpecRefs = new Set<string>();
+    for (const file of specFiles) {
+      const proposed = extractProposedSpec(file.path, file.content);
+      if (proposed) {
+        liveSpecRefs.add(proposed.ref);
+        if (upsertMinedItem(db, { type: 'review', summary: proposed.summary, source: 'mine', ref: proposed.ref, now })) upserted++;
+      }
     }
-  }
-  resolved += resolvePrefixed(db, 'review', 'spec:', liveSpecRefs, now);
+    resolved += resolvePrefixed(db, 'review', 'spec:', liveSpecRefs, now);
 
-  // --- Questions: doc Open-Questions sections ---
-  const liveQuestionRefs = new Set<string>();
-  for (const file of specFiles) {
-    for (const q of extractOpenQuestions(file.path, file.content)) {
-      liveQuestionRefs.add(q.ref);
-      if (upsertMinedItem(db, { type: 'question', summary: q.summary, source: 'mine', ref: q.ref, now })) upserted++;
+    const liveQuestionRefs = new Set<string>();
+    for (const file of specFiles) {
+      for (const q of extractOpenQuestions(file.path, file.content)) {
+        liveQuestionRefs.add(q.ref);
+        if (upsertMinedItem(db, { type: 'question', summary: q.summary, source: 'mine', ref: q.ref, now })) upserted++;
+      }
     }
+    resolved += resolvePrefixed(db, 'question', 'question:', liveQuestionRefs, now);
   }
-  resolved += resolvePrefixed(db, 'question', 'question:', liveQuestionRefs, now);
 
   // --- Escalations: error observations ---
   // Bound the scan to the recent window and cap rows — the observations table is

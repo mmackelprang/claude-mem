@@ -9,17 +9,16 @@ export interface AttentionItem {
 export interface ProgressBucket {
   agentType: string | null; agentId: string | null; bucket: string; total: number; byType: Record<string, number>;
 }
-export interface VelocityResult {
-  openCount: number | null; shippedCount: number | null;
-  shippedByWeek: { week: string; shipped: number }[]; error?: string;
-}
 export interface NextStepItem { memorySessionId: string; project: string; createdAtEpoch: number; text: string; }
 
 export interface MissionControlData {
   attention: AttentionItem[];
   ghAvailable: boolean;
+  // True when the Proposed-spec-review + doc-Open-Questions sources are gated off
+  // (repo-root resolution deferred to Backlog #24). Escalations + open-PR reviews
+  // still populate the Attention pane; velocity is a deferred 4th pane (#24).
+  specMiningDeferred: boolean;
   progress: ProgressBucket[];
-  velocity: VelocityResult | null;
   nextSteps: NextStepItem[];
   loading: boolean;
   error: string | null;
@@ -29,8 +28,8 @@ export interface MissionControlData {
 export function useMissionControl(): MissionControlData {
   const [attention, setAttention] = useState<AttentionItem[]>([]);
   const [ghAvailable, setGhAvailable] = useState(true);
+  const [specMiningDeferred, setSpecMiningDeferred] = useState(false);
   const [progress, setProgress] = useState<ProgressBucket[]>([]);
-  const [velocity, setVelocity] = useState<VelocityResult | null>(null);
   const [nextSteps, setNextSteps] = useState<NextStepItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,16 +38,18 @@ export function useMissionControl(): MissionControlData {
     setLoading(true);
     setError(null);
     try {
-      const [a, p, v, n] = await Promise.all([
+      // Phase 1 ships 3 panes — Attention (SQLite escalations + gh PR reviews),
+      // Progress (SQLite), Next-steps (SQLite). Velocity is deferred to #24, so it
+      // is not fetched here (its route stays registered, gated, for #24).
+      const [a, p, n] = await Promise.all([
         fetch(API_ENDPOINTS.MC_ATTENTION).then(r => r.json()),
         fetch(API_ENDPOINTS.MC_PROGRESS).then(r => r.json()),
-        fetch(API_ENDPOINTS.MC_VELOCITY).then(r => r.json()),
         fetch(API_ENDPOINTS.MC_NEXT_STEPS).then(r => r.json()),
       ]);
       setAttention(a.items ?? []);
       setGhAvailable(a.ghAvailable ?? true);
+      setSpecMiningDeferred(a.specMiningDeferred ?? false);
       setProgress(p.buckets ?? []);
-      setVelocity(v);
       setNextSteps(n.items ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -59,5 +60,5 @@ export function useMissionControl(): MissionControlData {
 
   useEffect(() => { load(); }, [load]);
 
-  return { attention, ghAvailable, progress, velocity, nextSteps, loading, error, refresh: load };
+  return { attention, ghAvailable, specMiningDeferred, progress, nextSteps, loading, error, refresh: load };
 }

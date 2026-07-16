@@ -2,14 +2,19 @@
 import React from 'react';
 import { useMissionControl, AttentionItem } from '../hooks/useMissionControl';
 
-function AttentionPane({ items, ghAvailable }: { items: AttentionItem[]; ghAvailable: boolean }) {
+export function AttentionPane({ items, ghAvailable, specMiningDeferred }: {
+  items: AttentionItem[]; ghAvailable: boolean; specMiningDeferred: boolean;
+}) {
   const byType = (type: string) => items.filter(i => i.type === type);
   const order = ['escalation', 'blocker', 'review', 'question'];
   return (
     <section className="mc-pane" data-testid="mc-attention">
       <h2>Attention — what needs you now</h2>
       {!ghAvailable && (
-        <p className="mc-note" data-testid="mc-gh-unavailable">PR mining unavailable (gh not authenticated) — showing specs & escalations only.</p>
+        <p className="mc-note" data-testid="mc-gh-unavailable">PR mining unavailable (gh not authenticated) — showing escalations only.</p>
+      )}
+      {specMiningDeferred && (
+        <p className="mc-note" data-testid="mc-spec-mining-deferred">Spec-review &amp; doc-question mining deferred — needs repo root (follow-up #24). Showing escalations + open-PR reviews.</p>
       )}
       {items.length === 0 && <p className="mc-empty">Nothing is gated on you right now.</p>}
       {order.map(type => {
@@ -33,32 +38,21 @@ function AttentionPane({ items, ghAvailable }: { items: AttentionItem[]; ghAvail
 }
 
 export function MissionControl() {
-  const { attention, ghAvailable, progress, velocity, nextSteps, loading, error, refresh } = useMissionControl();
+  const { attention, ghAvailable, specMiningDeferred, progress, nextSteps, loading, error, refresh } = useMissionControl();
 
   if (loading) return <div className="mc-loading">Loading Mission Control…</div>;
   if (error) return <div className="mc-error">Failed to load Mission Control: {error}</div>;
 
+  // Phase 1 = 3 panes that resolve from the deployed worker's environment
+  // (SQLite + gh). Velocity (reads docs/BUILDER_QUEUE.md) is deferred to #24 and
+  // intentionally not rendered — its route stays registered, gated, for re-enable.
   return (
     <div className="mission-control" data-testid="mission-control">
       <div className="mc-header">
         <button className="mc-refresh" onClick={refresh}>Refresh</button>
       </div>
 
-      <AttentionPane items={attention} ghAvailable={ghAvailable} />
-
-      <section className="mc-pane" data-testid="mc-velocity">
-        <h2>Velocity</h2>
-        {velocity?.error ? (
-          <p className="mc-error">Queue parse failed: {velocity.error}</p>
-        ) : (
-          <p>{velocity?.shippedCount ?? '—'} shipped · {velocity?.openCount ?? '—'} open</p>
-        )}
-        <ul>
-          {(velocity?.shippedByWeek ?? []).map(pt => (
-            <li key={pt.week}>{pt.week}: {pt.shipped} shipped</li>
-          ))}
-        </ul>
-      </section>
+      <AttentionPane items={attention} ghAvailable={ghAvailable} specMiningDeferred={specMiningDeferred} />
 
       <section className="mc-pane" data-testid="mc-progress">
         <h2>Progress (by agent × time)</h2>

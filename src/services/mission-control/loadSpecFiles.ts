@@ -1,7 +1,7 @@
 // src/services/mission-control/loadSpecFiles.ts
 import { readdirSync, readFileSync, existsSync, statSync } from 'fs';
 import path from 'path';
-import { getPackageRoot } from '../../shared/paths.js';
+import { resolveRepoRoot } from './repo-root.js';
 
 const SPEC_DIRS = [
   'docs/superpowers/specs',
@@ -21,9 +21,17 @@ function walkMarkdown(dir: string): string[] {
   return out;
 }
 
-/** Read spec + ADR markdown off disk for the miner. Best-effort: unreadable files are skipped. */
+/**
+ * Read spec + ADR markdown off disk for the miner. Best-effort: unreadable files
+ * are skipped.
+ *
+ * DEFERRED (#24): repo-root resolution is gated off in Phase 1, so this returns
+ * `[]` — spec-review + doc-question mining are a clean no-op until #24 lands a
+ * project-root strategy. No dangling `getPackageRoot()`-for-repo-files call.
+ */
 export function loadSpecFiles(): { path: string; content: string }[] {
-  const root = getPackageRoot();
+  const root = resolveRepoRoot();
+  if (root === null) return [];
   const files: { path: string; content: string }[] = [];
   for (const rel of SPEC_DIRS) {
     for (const full of walkMarkdown(path.join(root, rel))) {

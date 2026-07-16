@@ -9,7 +9,7 @@ import { runAttentionMine, readOpenAttentionItems } from '../../../mission-contr
 import { parseBuilderQueue } from '../../../mission-control/BuilderQueueParser.js';
 import { createGitGhBoundary, type GitGhBoundary } from '../../../mission-control/shell.js';
 import { loadSpecFiles } from '../../../mission-control/loadSpecFiles.js';
-import { getPackageRoot } from '../../../../shared/paths.js';
+import { resolveRepoRoot, REPO_ROOT_DEFERRED_REASON } from '../../../mission-control/repo-root.js';
 import { logger } from '../../../../utils/logger.js';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
@@ -54,7 +54,14 @@ export class MissionControlRoutes extends BaseRouteHandler {
     this.lastMineAt = now;
     try {
       const db = this.dbManager.getSessionStore().db;
-      runAttentionMine(db, this.boundary, { specFiles: loadSpecFiles(), now });
+      // specMiningEnabled tracks the same repo-root gate as loadSpecFiles(): when
+      // deferred (#24) the miner must NOT auto-resolve spec:/question: items it
+      // never actually checked. loadSpecFiles() returns [] and mining is skipped.
+      runAttentionMine(db, this.boundary, {
+        specFiles: loadSpecFiles(),
+        specMiningEnabled: resolveRepoRoot() !== null,
+        now,
+      });
       return true;
     } catch (error) {
       logger.warn('WORKER', 'Attention mine pass failed', {
@@ -69,7 +76,15 @@ export class MissionControlRoutes extends BaseRouteHandler {
     const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
     this.mineOnce(refresh);
     const db = this.dbManager.getSessionStore().db;
-    res.json({ items: readOpenAttentionItems(db, project), ghAvailable: this.cachedGhAvailable() });
+    // `specMiningDeferred` tells the UI that the Proposed-spec-review and
+    // doc-Open-Questions sources are gated off (#24) — so the pane can explain
+    // why "reviews" shows PRs only and "questions" is empty, instead of looking
+    // silently broken. Escalations (SQLite) + open-PR reviews (gh) still ship.
+    res.json({
+      items: readOpenAttentionItems(db, project),
+      ghAvailable: this.cachedGhAvailable(),
+      specMiningDeferred: resolveRepoRoot() === null,
+    });
   });
 
   private handleProgress = this.wrapHandler((req: Request, res: Response): void => {
@@ -81,7 +96,17 @@ export class MissionControlRoutes extends BaseRouteHandler {
   });
 
   private handleVelocity = this.wrapHandler((req: Request, res: Response): void => {
-    const queuePath = path.join(getPackageRoot(), 'docs', 'BUILDER_QUEUE.md');
+    // DEFERRED (#24): velocity reads docs/BUILDER_QUEUE.md, a repo-root file the
+    // deployed worker cannot resolve (getPackageRoot() = plugin install root).
+    // Gate to a clearly-labeled deferred state — never call getPackageRoot() for
+    // a repo file, never crash. The route stays registered so #24 re-enables it
+    // by implementing resolveRepoRoot() (and re-adding the UI pane).
+    const root = resolveRepoRoot();
+    if (root === null) {
+      res.json({ deferred: true, reason: REPO_ROOT_DEFERRED_REASON, openCount: null, shippedCount: null, shippedByWeek: [] });
+      return;
+    }
+    const queuePath = path.join(root, 'docs', 'BUILDER_QUEUE.md');
     let parsed;
     try {
       if (!existsSync(queuePath)) throw new Error(`BUILDER_QUEUE.md not found at ${queuePath}`);

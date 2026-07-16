@@ -95,6 +95,28 @@ describe('runAttentionMine', () => {
     expect(items.some(i => i.type === 'escalation')).toBe(true);
   });
 
+  it('does NOT wipe existing spec/question items when spec mining is gated off (#24)', () => {
+    const db = freshDb();
+    const boundary = { ghAvailable: () => true, listOpenPrs: (): OpenPr[] => [] };
+
+    // Pass 1: mining enabled (default) → spec-review + question items are raised.
+    runAttentionMine(db, boundary, { specFiles: [SPEC], now: NOW });
+    const before = readOpenAttentionItems(db);
+    expect(before.some(i => i.type === 'review' && i.ref.startsWith('spec:'))).toBe(true);
+    expect(before.some(i => i.type === 'question')).toBe(true);
+
+    // Pass 2: repo-root gated off — specFiles=[] AND specMiningEnabled=false.
+    // The gated pass observed nothing about specs, so it must NOT auto-resolve
+    // the still-open spec/question items (the distinction the ghAvailable guard
+    // already makes for PR reviews).
+    const result = runAttentionMine(db, boundary, { specFiles: [], specMiningEnabled: false, now: NOW });
+    const after = readOpenAttentionItems(db);
+    expect(after.some(i => i.type === 'review' && i.ref.startsWith('spec:'))).toBe(true);
+    expect(after.some(i => i.type === 'question')).toBe(true);
+    // Nothing spec/question-related was resolved by the gated pass.
+    expect(result.resolved).toBe(0);
+  });
+
   it('auto-resolves an escalation once its error signature leaves the recent window', () => {
     const db = freshDb();
     const boundary = { ghAvailable: () => true, listOpenPrs: (): OpenPr[] => [] };
