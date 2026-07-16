@@ -111,8 +111,8 @@ export function App() {
       />
 
       <div className="view-toggle">
-        <button className={view === 'feed' ? 'active' : ''} onClick={() => setView('feed')}>Feed</button>
-        <button className={view === 'mission-control' ? 'active' : ''} onClick={() => setView('mission-control')}>Mission Control</button>
+        <button aria-pressed={view === 'feed'} className={view === 'feed' ? 'active' : ''} onClick={() => setView('feed')}>Feed</button>
+        <button aria-pressed={view === 'mission-control'} className={view === 'mission-control' ? 'active' : ''} onClick={() => setView('mission-control')}>Mission Control</button>
       </div>
 
       {view === 'mission-control' ? (
