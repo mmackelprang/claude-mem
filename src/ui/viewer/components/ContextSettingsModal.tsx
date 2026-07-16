@@ -4,6 +4,9 @@ import { TerminalPreview } from './TerminalPreview';
 import { useContextPreview } from '../hooks/useContextPreview';
 import { DEFAULT_SETTINGS } from '../constants/settings';
 import { CollapsibleSection, FormField, ToggleSwitch } from './SettingsPrimitives';
+import { useRuntimeRole } from '../hooks/useRuntimeRole';
+import { ConnectionPanel } from './ConnectionPanel';
+import { ServerConfigWizard } from './ServerConfigWizard';
 
 interface ContextSettingsModalProps {
   isOpen: boolean;
@@ -23,6 +26,7 @@ export function ContextSettingsModal({
   saveStatus
 }: ContextSettingsModalProps) {
   const [formState, setFormState] = useState<Settings>(settings);
+  const { effectiveRole, needsManualToggle, override, setOverride } = useRuntimeRole();
 
   useEffect(() => {
     setFormState(settings);
@@ -128,6 +132,34 @@ export function ContextSettingsModal({
 
           {/* Right column - Settings Panel */}
           <div className="settings-column">
+            {/* Section 0: Connection / Server configuration (context-aware) */}
+            <CollapsibleSection
+              title={effectiveRole === 'server' ? 'Server configuration' : 'Connection'}
+              defaultOpen={true}
+            >
+              {needsManualToggle && (
+                <div className="role-toggle" role="tablist" aria-label="Viewing">
+                  <span>Viewing:</span>
+                  <button type="button" role="tab" aria-selected={(override ?? 'worker') === 'worker'}
+                    className={`cm-btn ${(override ?? 'worker') === 'worker' ? 'cm-btn-primary' : ''}`}
+                    onClick={() => setOverride('worker')}>Local worker</button>
+                  <button type="button" role="tab" aria-selected={override === 'server'}
+                    className={`cm-btn ${override === 'server' ? 'cm-btn-primary' : ''}`}
+                    onClick={() => setOverride('server')}>Server</button>
+                </div>
+              )}
+              {effectiveRole === 'server'
+                ? <ServerConfigWizard serverContext={true} />
+                : (
+                  <>
+                    <ConnectionPanel settings={formState} onSave={onSave} isSaving={isSaving} />
+                    <details className="wizard-helper"><summary>Generate server config…</summary>
+                      <ServerConfigWizard serverContext={false} />
+                    </details>
+                  </>
+                )}
+            </CollapsibleSection>
+
             {/* Section 1: Loading */}
             <CollapsibleSection
               title="Loading"
