@@ -166,6 +166,45 @@ describe('parseAgentXml — observations', () => {
   });
 });
 
+describe('parseAgentXml — reject branches stay byte-identical after #20 instrumentation', () => {
+  // Phase 1 (#20 site a) added a distinct WARN at every {valid:false} return
+  // path in parseAgentXml. The logging is incidental — these tests lock the
+  // BEHAVIOR (each branch still returns {valid:false}), not the log text.
+
+  it('rejects blank input (empty string)', () => {
+    expect(parseAgentXml('').valid).toBe(false);
+  });
+
+  it('rejects whitespace-only input', () => {
+    expect(parseAgentXml('   \n\t  ').valid).toBe(false);
+  });
+
+  it('rejects non-string input', () => {
+    expect(parseAgentXml(null as unknown as string).valid).toBe(false);
+    expect(parseAgentXml(undefined as unknown as string).valid).toBe(false);
+  });
+
+  it('rejects input with no <observation|summary> root tag', () => {
+    expect(parseAgentXml('just some prose, no tags at all').valid).toBe(false);
+  });
+
+  it('rejects an <observation> root that yields zero parsable blocks', () => {
+    // A lone <observation> with only a <type> is an all-empty ghost (site b
+    // skips it), leaving zero blocks → whole-response reject.
+    expect(parseAgentXml('<observation><type>bugfix</type></observation>').valid).toBe(false);
+  });
+
+  it('rejects a <summary> root with no parsable sub-tags', () => {
+    expect(parseAgentXml('<summary></summary>').valid).toBe(false);
+    expect(parseAgentXml('<summary>no recognized sub-tags here</summary>').valid).toBe(false);
+  });
+
+  it('still accepts a well-formed observation (instrumentation did not over-reject)', () => {
+    const result = parseAgentXml('<observation><type>discovery</type><title>Real</title></observation>');
+    expect(result.valid).toBe(true);
+  });
+});
+
 describe('parseAgentXml — fence tolerance (#2233 Part A)', () => {
   it('parses plain XML input correctly (no fence)', () => {
     const xml = `<observation>
