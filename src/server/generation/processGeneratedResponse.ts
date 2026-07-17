@@ -275,6 +275,23 @@ async function persistGeneratedObservations(
     for (let index = 0; index < rendered.length; index++) {
       const { kind, content, metadata } = rendered[index]!;
       if (!content || content.trim().length === 0) {
+        // #20 site c — instrumentation only (behavior-neutral). This drop was
+        // silent. renderObservationContent ignores concepts/files_*, so an
+        // observation whose only signal is concepts/files renders to '' and is
+        // dropped here. The hadConcepts/hadFiles flags are the exact signal
+        // Phase 0/2 needs to confirm site c. The `continue` is unchanged.
+        logger.warn('SYSTEM', 'dropping observation: rendered content empty', {
+          jobId: fresh.id,
+          index,
+          dropReason: 'render_empty',
+          hadConcepts: Array.isArray((metadata as { concepts?: unknown }).concepts) &&
+            (metadata as { concepts: unknown[] }).concepts.length > 0,
+          hadFiles:
+            (Array.isArray((metadata as { files_read?: unknown }).files_read) &&
+              (metadata as { files_read: unknown[] }).files_read.length > 0) ||
+            (Array.isArray((metadata as { files_modified?: unknown }).files_modified) &&
+              (metadata as { files_modified: unknown[] }).files_modified.length > 0),
+        });
         continue;
       }
 
@@ -282,6 +299,14 @@ async function persistGeneratedObservations(
       // string through, scrub before persisting.
       const scrubbed = stripTags(content);
       if (!scrubbed.stripped || scrubbed.stripped.trim().length === 0) {
+        // #20 site d — instrumentation only (behavior-neutral). This drop was
+        // silent: a privately-tagged observation is emptied by the privacy
+        // scrub and dropped. The `continue` is unchanged.
+        logger.warn('SYSTEM', 'dropping observation: empty after privacy scrub', {
+          jobId: fresh.id,
+          index,
+          dropReason: 'scrub_empty',
+        });
         continue;
       }
 
@@ -426,6 +451,20 @@ async function persistGeneratedObservations(
       });
     }
 
+    // #20 — per-job render-vs-persist delta (instrumentation only). Surfaces
+    // each job's drop count without cross-referencing the per-observation site
+    // c/d logs above, so the aggregate ~47% can be attributed to a dominant
+    // site. Behavior-neutral: a WARN only, no control-flow change.
+    if (rendered.length !== persisted.length) {
+      logger.warn('SYSTEM', 'generation job persisted fewer observations than rendered', {
+        jobId: fresh.id,
+        dropReason: 'render_persist_delta',
+        rendered: rendered.length,
+        persisted: persisted.length,
+        dropped: rendered.length - persisted.length,
+      });
+    }
+
     return {
       kind: 'completed' as const,
       jobId: fresh.id,
@@ -473,7 +512,11 @@ function renderSummaryContent(summary: ParsedSummary): string {
   return parts.join('\n\n').trim();
 }
 
-function renderObservationContent(observation: ParsedObservation): string {
+// Exported for unit testing (#20 site c): lets a pure test document, without a
+// Postgres-gated integration path, that a concepts-only / files-only
+// observation renders to '' today (the exact trigger of the site-c drop).
+// Export-only — behavior unchanged.
+export function renderObservationContent(observation: ParsedObservation): string {
   const parts: string[] = [];
   if (observation.title) parts.push(observation.title);
   if (observation.subtitle) parts.push(observation.subtitle);

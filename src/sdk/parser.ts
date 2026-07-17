@@ -40,6 +40,13 @@ export type ParseResult =
 
 export function parseAgentXml(raw: string, correlationId?: string | number): ParseResult {
   if (typeof raw !== 'string' || !raw.trim()) {
+    // #20 site a — instrumentation only (behavior-neutral). Name every
+    // whole-response reject branch so the `parse_error` rate is attributable
+    // by cause. Return value unchanged.
+    logger.warn('PARSER', 'Rejecting response: blank or non-string input', {
+      correlationId,
+      dropReason: 'parse_reject_blank_input',
+    });
     return { valid: false };
   }
 
@@ -65,6 +72,11 @@ export function parseAgentXml(raw: string, correlationId?: string | number): Par
 
   const firstRoot = /<(observation|summary)\b/i.exec(raw);
   if (!firstRoot) {
+    // #20 site a — no <observation|summary> root tag. Behavior-neutral log.
+    logger.warn('PARSER', 'Rejecting response: no <observation|summary> root tag', {
+      correlationId,
+      dropReason: 'parse_reject_no_root',
+    });
     return { valid: false };
   }
 
@@ -72,6 +84,12 @@ export function parseAgentXml(raw: string, correlationId?: string | number): Par
   if (rootName === 'observation') {
     const observations = parseObservationBlocks(raw, correlationId);
     if (observations.length === 0) {
+      // #20 site a — <observation> root but zero parsable blocks. This is the
+      // batch-wide reject: a whole model response producing no observations.
+      logger.warn('PARSER', 'Rejecting response: <observation> root but zero parsable blocks', {
+        correlationId,
+        dropReason: 'parse_reject_zero_blocks',
+      });
       return { valid: false };
     }
     return { valid: true, observations, summary: null };
@@ -79,6 +97,11 @@ export function parseAgentXml(raw: string, correlationId?: string | number): Par
 
   const summary = parseSummaryBlock(raw, correlationId);
   if (!summary) {
+    // #20 site a — <summary> root but no parsable summary. Behavior-neutral log.
+    logger.warn('PARSER', 'Rejecting response: <summary> root but no parsable summary', {
+      correlationId,
+      dropReason: 'parse_reject_no_summary',
+    });
     return { valid: false };
   }
   return { valid: true, observations: [], summary };
@@ -128,9 +151,13 @@ function parseObservationBlocks(text: string, correlationId?: string | number): 
     }
 
     if (!title && !narrative && facts.length === 0 && cleanedConcepts.length === 0) {
+      // #20 site b — per-observation empty-field skip. Already logged; add a
+      // structured dropReason so the parse-drop breakdown is uniformly queryable
+      // alongside the site-a reject reasons. Behavior-neutral.
       logger.warn('PARSER', 'Skipping empty observation (all content fields null)', {
         correlationId,
-        type: finalType
+        type: finalType,
+        dropReason: 'skip_empty_observation'
       });
       continue;
     }
