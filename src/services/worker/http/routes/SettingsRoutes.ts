@@ -13,6 +13,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { clearPortCache } from '../../../../shared/worker-utils.js';
 import { snapshotDependencyHealth } from '../../../../shared/dependency-health.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from '../../../../shared/atomic-json.js';
+import { ConnectionStore } from '../../ConnectionStore.js';
 
 const toggleMcpSchema = z.object({
   enabled: z.boolean(),
@@ -37,7 +38,13 @@ export class SettingsRoutes extends BaseRouteHandler {
   private handleGetSettings = this.wrapHandler((req: Request, res: Response): void => {
     const settingsPath = paths.settings();
     this.ensureSettingsFile(settingsPath);
-    const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
+    // Reconcile connection profiles on read so the response is consistent with
+    // what a save would persist: seed the Local worker and, for a legacy
+    // runtime=server install with no CLAUDE_MEM_CONNECTIONS, adopt the canonical
+    // server keys into an active server profile. Without this, the panel would
+    // show the Local worker as active for such installs (misrepresenting the
+    // live runtime) until the first save. Pure transform — no write here.
+    const settings = ConnectionStore.applyToSettings(SettingsDefaultsManager.loadFromFile(settingsPath));
     res.json(settings);
   });
 
@@ -104,6 +111,12 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY',
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE',
       'CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED',
+      'CLAUDE_MEM_CONNECTIONS',
+      'CLAUDE_MEM_ACTIVE_CONNECTION',
+      'CLAUDE_MEM_RUNTIME',
+      'CLAUDE_MEM_SERVER_URL',
+      'CLAUDE_MEM_SERVER_API_KEY',
+      'CLAUDE_MEM_SERVER_PROJECT_ID',
     ];
 
     for (const key of settingKeys) {
@@ -111,6 +124,11 @@ export class SettingsRoutes extends BaseRouteHandler {
         settings[key] = req.body[key];
       }
     }
+
+    // ConnectionStore is the single owner of canonical-key derivation: seed the
+    // Local worker + reconcile CLAUDE_MEM_RUNTIME/SERVER_* from the active
+    // profile, in-memory, so the file is written once and stays consistent.
+    settings = ConnectionStore.applyToSettings(settings);
 
     writeJsonFileAtomic(settingsPath, settings);
 
@@ -231,6 +249,32 @@ export class SettingsRoutes extends BaseRouteHandler {
       } catch (error) {
         logger.debug('SETTINGS', 'Invalid URL format', { url: settings.CLAUDE_MEM_OPENROUTER_SITE_URL, error: error instanceof Error ? error.message : String(error) });
         return { valid: false, error: 'CLAUDE_MEM_OPENROUTER_SITE_URL must be a valid URL' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_RUNTIME) {
+      if (!['worker', 'server'].includes(settings.CLAUDE_MEM_RUNTIME)) {
+        return { valid: false, error: 'CLAUDE_MEM_RUNTIME must be "worker" or "server"' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_CONNECTIONS !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(settings.CLAUDE_MEM_CONNECTIONS);
+      } catch {
+        return { valid: false, error: 'CLAUDE_MEM_CONNECTIONS must be a JSON array of connection profiles' };
+      }
+      if (!Array.isArray(parsed)) {
+        return { valid: false, error: 'CLAUDE_MEM_CONNECTIONS must be a JSON array' };
+      }
+      for (const profile of parsed as Array<Record<string, unknown>>) {
+        if (!profile || typeof profile.id !== 'string' || typeof profile.name !== 'string') {
+          return { valid: false, error: 'Each connection profile needs a string id and name' };
+        }
+        if (profile.runtime !== 'worker' && profile.runtime !== 'server') {
+          return { valid: false, error: `Connection profile "${profile.name}" has an invalid runtime (must be worker|server)` };
+        }
       }
     }
 

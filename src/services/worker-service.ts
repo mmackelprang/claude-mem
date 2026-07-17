@@ -106,6 +106,10 @@ import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { CloudSyncRoutes } from './worker/http/routes/CloudSyncRoutes.js';
+import { RuntimeRoleRoutes } from './worker/http/routes/RuntimeRoleRoutes.js';
+import { ServerConfigRoutes } from './worker/http/routes/ServerConfigRoutes.js';
+import { ConnectionTestRoutes } from './worker/http/routes/ConnectionTestRoutes.js';
+import { IngestStatusRoutes } from './worker/http/routes/IngestStatusRoutes.js';
 
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
 import { CorpusBuilder } from './worker/knowledge/CorpusBuilder.js';
@@ -331,7 +335,10 @@ export class WorkerService implements WorkerRef {
         req.path === '/health' ||
         req.path === '/readiness' ||
         req.path === '/version' ||
-        req.path === '/settings/dependency-health'
+        req.path === '/settings/dependency-health' ||
+        req.path === '/runtime-role' ||
+        req.path === '/server-config' ||
+        req.path === '/connection/test'
       ) {
         next();
         return;
@@ -363,6 +370,9 @@ export class WorkerService implements WorkerRef {
     this.missionControlMineTimer = setInterval(() => { missionControlRoutes.mineOnce(true); }, 5 * 60_000);
     if (typeof this.missionControlMineTimer.unref === 'function') this.missionControlMineTimer.unref();
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
+    this.server.registerRoutes(new RuntimeRoleRoutes());
+    this.server.registerRoutes(new ServerConfigRoutes());
+    this.server.registerRoutes(new ConnectionTestRoutes());
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
     this.server.registerRoutes(new ServerV1Routes({
@@ -524,6 +534,7 @@ export class WorkerService implements WorkerRef {
       );
       this.searchRoutes = new SearchRoutes(searchManager);
       this.server.registerRoutes(this.searchRoutes);
+      this.server.registerRoutes(new IngestStatusRoutes(() => this.dbManager.getConnection()));
       logger.info('WORKER', 'SearchManager initialized and search routes registered');
 
       const corpusBuilder = new CorpusBuilder(

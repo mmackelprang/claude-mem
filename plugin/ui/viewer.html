@@ -1865,6 +1865,9 @@
     }
 
     .form-field input[type="number"],
+    .form-field input[type="text"],
+    .form-field input[type="password"],
+    .form-field input:not([type]),
     .form-field select {
       width: 100%;
       background: var(--color-bg-input);
@@ -1878,16 +1881,26 @@
     }
 
     .form-field input[type="number"]:hover,
+    .form-field input[type="text"]:hover,
+    .form-field input[type="password"]:hover,
+    .form-field input:not([type]):hover,
     .form-field select:hover {
       border-color: var(--color-border-hover);
     }
 
     .form-field input[type="number"]:focus,
+    .form-field input[type="text"]:focus,
+    .form-field input[type="password"]:focus,
+    .form-field input:not([type]):focus,
     .form-field select:focus {
       outline: none;
       border-color: var(--color-border-focus);
-      box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+      box-shadow: var(--shadow-focus);
     }
+
+    /* Key + reveal-toggle row: the input fills, the button sits beside it
+       (.key-input flex layout is defined in the Connection Profiles block). */
+    .key-input input { flex: 1; min-width: 0; }
 
     /* ============================================
        NEW: Toggle Switches
@@ -2460,6 +2473,89 @@
 @media (prefers-reduced-motion: no-preference) {
   .mc-pane { animation: slideIn 0.2s ease-out; }
 }
+
+/* ===== Connection Profiles + Server-Config Wizard (Phase 1) ===== */
+/* Connection panel (Task 9.2) */
+.connection-panel { display: flex; flex-direction: column; gap: 12px; }
+.context-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-muted); }
+.context-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent-primary); }
+.subsection-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); margin-top: 8px; }
+.profile-list { display: flex; flex-direction: column; border: 1px solid var(--color-border-primary); border-radius: 6px; overflow: hidden; }
+.profile-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 8px 10px;
+  background: var(--color-bg-card); border: none; border-bottom: 1px solid var(--color-border-primary); text-align: left; cursor: pointer; }
+.profile-row:last-child { border-bottom: none; }
+.profile-row.focused { background: var(--color-bg-card-hover); }
+.profile-row:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
+.radio-glyph { color: var(--color-text-muted); }
+.radio-glyph.on { color: var(--color-accent-primary); }
+.profile-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.profile-name { color: var(--color-text-primary); font-size: 13px; }
+.profile-subtitle { color: var(--color-text-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-badges { display: flex; align-items: center; gap: 6px; }
+.type-badge { background: var(--color-type-badge-bg); color: var(--color-type-badge-text); border-radius: 4px; padding: 1px 6px; font-size: 10px; }
+.active-tag, .default-tag { color: var(--color-text-muted); font-size: 11px; }
+.tested-mark.pass { color: var(--color-accent-success); font-size: 11px; }
+.tested-mark.fail { color: var(--color-accent-error); font-size: 11px; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cm-btn { min-height: 32px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-card); color: var(--color-text-primary); cursor: pointer; font-size: 12px; }
+.cm-btn:hover:not(:disabled) { background: var(--color-bg-card-hover); }
+.cm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cm-btn-primary { background: var(--color-accent-primary); border-color: var(--color-accent-primary); color: #fff; }
+.cm-btn-danger { color: var(--color-accent-error); border-color: var(--color-accent-error); }
+.cm-btn:focus-visible, .reveal-toggle:focus-visible { box-shadow: var(--shadow-focus); outline: none; }
+.preset-menu { position: relative; }
+.preset-options { position: absolute; z-index: 5; margin-top: 4px; background: var(--color-bg-card);
+  border: 1px solid var(--color-border-primary); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 240px; }
+.preset-option { display: flex; flex-direction: column; width: 100%; padding: 8px 10px; background: none; border: none; text-align: left; cursor: pointer; }
+.preset-option:hover { background: var(--color-bg-card-hover); }
+.preset-label { color: var(--color-text-primary); font-size: 13px; }
+.preset-help { color: var(--color-text-muted); font-size: 11px; }
+.profile-editor { display: flex; flex-direction: column; gap: 10px; }
+.key-input { display: flex; gap: 6px; }
+.reveal-toggle { border: 1px solid var(--color-border-primary); background: var(--color-bg-card); border-radius: 6px; padding: 0 10px; cursor: pointer; color: var(--color-text-primary); }
+.editor-actions, .delete-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.delete-confirm { font-size: 12px; color: var(--color-text-primary); }
+.activation-toast { color: var(--color-accent-success); font-size: 12px; }
+.saving-hint { color: var(--color-text-muted); font-size: 12px; }
+.empty-hint { font-style: italic; }
+
+/* Test stepper (Task 10.2) */
+.test-stepper { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--color-border-primary); border-radius: 6px; padding: 10px; }
+.test-step { display: grid; grid-template-columns: 18px 110px 1fr; gap: 8px; align-items: baseline; font-size: 12px; }
+.test-step .step-label { color: var(--color-text-primary); }
+.test-step .step-message { color: var(--color-text-muted); }
+.test-step.pass .step-glyph { color: var(--color-accent-success); }
+.test-step.warn .step-glyph { color: var(--color-accent-summary); }
+.test-step.fail .step-glyph { color: var(--color-accent-error); }
+.test-step.skipped .step-glyph, .test-step.running .step-glyph { color: var(--color-text-muted); }
+.test-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 8px 10px; border-radius: 6px; font-size: 12px; }
+.test-banner.pass { color: var(--color-accent-success); border: 1px solid var(--color-accent-success); }
+.test-banner.fail { color: var(--color-accent-error); border: 1px solid var(--color-accent-error); }
+.banner-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Server-config wizard (Task 11.4) */
+.wizard { display: flex; flex-direction: column; gap: 10px; }
+.current-config { font-size: 12px; color: var(--color-text-primary); background: var(--color-bg-stat); border-radius: 6px; padding: 8px 10px; }
+.ingest-line { margin-top: 4px; }
+.ingest-line.ok { color: var(--color-accent-success); }
+.ingest-line.fail { color: var(--color-accent-error); }
+.ingest-line.none { color: var(--color-text-muted); }
+.cost-warning { color: var(--color-accent-summary); font-size: 12px; border-left: 3px solid var(--color-accent-summary); padding-left: 8px; }
+.key-hint { color: var(--color-text-muted); font-size: 11px; }
+.output-toggle { display: flex; gap: 6px; }
+.output-block { position: relative; background: var(--color-bg-stat); border-radius: 6px; overflow-x: auto; }
+.output-block pre { margin: 0; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; color: var(--color-text-primary); white-space: pre; }
+.copy-btn { position: absolute; top: 6px; right: 6px; border: 1px solid var(--color-border-primary); background: var(--color-bg-card); border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 11px; color: var(--color-text-primary); }
+.apply-steps { font-size: 12px; color: var(--color-text-primary); padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.apply-steps .gotcha { color: var(--color-accent-summary); }
+.apply-steps code { background: var(--color-bg-tertiary); padding: 0 4px; border-radius: 3px; }
+
+/* Context-aware section wiring (Task 12.3) */
+.role-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; }
+.wizard-helper { margin-top: 12px; }
+.wizard-helper summary { cursor: pointer; color: var(--color-text-muted); font-size: 12px; }
   </style>
 </head>
 

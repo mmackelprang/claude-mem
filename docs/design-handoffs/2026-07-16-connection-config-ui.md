@@ -216,8 +216,8 @@ Testing “NAS (Tailscale)”…
 Steps, in order, short-circuit on the first hard failure:
 
 1. **Reachable** — `GET {url}/healthz` → 200.
-2. **Authenticated** — a scoped, read-only call with the key → 200 vs 401/403.
-3. **Project valid** — the `projectId` is usable on that server.
+2. **Authenticated** — a scoped, read-only call with the key → 200 vs 401/403. **Variant-detecting** (verified in code): try the Postgres server-beta's `GET /v1/connect` first; on **404** fall back to the local worker's `GET /v1/projects`. Both-404 = **incompatible server** ("No compatible claude-mem server at this URL") — **never** a key error. A 404 here must not read as "the server rejected the API key."
+3. **Project valid** — the `projectId` is usable on that server, using the endpoint for the matched variant: server-beta → `GET /v1/projects/:id/jobs`, worker → `GET /v1/projects/:id` (each: 200 ok / 404 project-not-found → warn / 403 → fail).
 
 ### 5.2 Per-step visual states
 
@@ -287,6 +287,8 @@ Copy is keyed off the machine-stable `code` in the response (§5.5), so the mess
 | `forbidden` | `The key was accepted but lacks access (403).` |
 | `missing_key` | `This server requires an API key. Add one to continue.` |
 | `auth_not_required` | *(treat as pass)* `Server didn’t require a key.` |
+| `incompatible_server` | *(fail; NOT a key error — banner title "not a claude-mem server")* `No compatible claude-mem server at {host}. Check the URL — this doesn’t expose a claude-mem API.` |
+| `auth_failed` | *(fail; unexpected non-4xx/404 response, e.g. 5xx — never claims a bad key)* `Couldn’t verify the API key against {host} ({http}).` |
 
 **Step 3 — Project valid**
 | `code` | Status | Message |
@@ -340,7 +342,7 @@ Contract requirements for the Planner:
 - **Timeout budget** — cap each step (suggest ~5s reachable, ~5s auth) so the stepper can't hang; `timeout`/`unreachable` codes map to copy. Expose the timeout value so `{timeout}` interpolates.
 - **SSRF note (R3):** the probe fetches an operator-supplied URL from the worker. Phase 1 is localhost-initiated; scope the endpoint strictly to this test purpose. Flagged for Planner/Architect, revisit under Phase 2 auth.
 
-Planner must also confirm which **scoped, read-only** server call stands in for step 2 (authenticated) and step 3 (project). Candidates already in the worker's server API: a lightweight authenticated GET that returns 401/403 vs 200, and a project-scoped read that distinguishes "unknown project" (→ warn) from "forbidden" (→ fail). If no single call cleanly separates those, that's a small backend design task for the Planner to resolve.
+**Resolved (PR #30):** the scoped read-only calls for steps 2 & 3 are **variant-detecting**, because the two target types expose different auth APIs — step 2 = `GET /v1/connect` (server-beta) with fallback to `GET /v1/projects` (worker); step 3 = `GET /v1/projects/:id/jobs` (server-beta) or `GET /v1/projects/:id` (worker). Both distinguish 200 (ready) / 404 (unknown project → warn) / 403 (forbidden → fail). A double-404 on step 2 is an incompatible-server result, not a bad key. See §5.1.
 
 ---
 
