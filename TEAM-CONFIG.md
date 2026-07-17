@@ -165,28 +165,40 @@ Test catches exactly this before activation.
 
 ---
 
-## 4. Lock the file down yourself — nothing else will
+## 4. File permissions — the tooling now tightens them; verify on a shared host
 
-`~/.claude-mem/settings.json` now holds a **live API key** (whether you got there via §2 or §3), and the tooling that
-wrote it does **not** restrict its permissions.
+`~/.claude-mem/settings.json` holds a **live API key** (whether you got there via §2 or §3). As of the
+file-mode hardening (#23), **every writer that lands the key now tightens the file**:
+
+- **POSIX (macOS / Linux):** the file is `chmod 0600` (owner-only) by the writer that creates or updates it —
+  `persistServerSettings()` (`server-bootstrap.ts`), the installer's `mergeSettings()` (`install.ts`), and the
+  Settings-UI save path (`SettingsRoutes.ts`, both the activate POST and first-run defaults create). This closes the
+  old **umask create-window** where a freshly-created `settings.json` briefly opened at `~0644`, world-readable.
+- **Windows:** POSIX `chmod` is a **no-op** (the mode bits are not enforced), so the file relies on your
+  **user-profile ACLs** — under `%USERPROFILE%` that is already scoped to you on a standard single-user box. The same
+  writers additionally run a **best-effort `icacls`** tightening (inheritance removed, current user granted full
+  control). It is *best-effort*: if `icacls` is missing or denied, install/save still succeeds and the profile ACLs
+  remain in force.
+
+**On a multi-user host, verify it yourself** — belt and suspenders, and the fastest way to be sure:
 
 **macOS / Linux:**
 
 ```bash
-chmod 600 ~/.claude-mem/settings.json
+stat -c '%a' ~/.claude-mem/settings.json   # expect: 600
+chmod 600 ~/.claude-mem/settings.json      # if it isn't
 ```
 
-**Windows** — break inheritance and grant only yourself:
+**Windows** — inspect, and re-tighten if needed:
 
 ```powershell
-icacls "$env:USERPROFILE\.claude-mem\settings.json" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+icacls "$env:USERPROFILE\.claude-mem\settings.json"                                    # inspect the ACL
+icacls "$env:USERPROFILE\.claude-mem\settings.json" /inheritance:r /grant:r "$($env:USERNAME):F"
 ```
 
-> 🔒 **Do not assume the tooling did this.** The only `chmod 0600` on `settings.json` lives in `persistServerSettings()`
-> (`server-bootstrap.ts:171`), reachable **only** via a bootstrap path that never runs on a teammate machine (§5). The
-> writer that actually runs (`mergeSettings` → `writeJsonFileAtomic`, and the `/api/settings` POST the viewer uses)
-> creates the file under your **process umask** (`atomic-json.ts:77-86`) — typically **`0644`, world-readable**. On a
-> shared machine that leaks your key. Lock it.
+> 🔒 **Why still verify?** The automated tightening is best-effort on Windows and depends on the writer running to
+> completion. On a genuinely shared machine — multiple interactive users on one box — confirm the ACL grants only you.
+> On a standard single-user profile, the defaults plus the automated tightening already cover you.
 
 ---
 

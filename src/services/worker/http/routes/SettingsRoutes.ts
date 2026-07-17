@@ -2,7 +2,7 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import path from 'path';
-import { readFileSync, existsSync, renameSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, renameSync, mkdirSync, chmodSync } from 'fs';
 import { getPackageRoot, paths } from '../../../../shared/paths.js';
 import { logger } from '../../../../utils/logger.js';
 import { SettingsManager } from '../../SettingsManager.js';
@@ -13,6 +13,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { clearPortCache } from '../../../../shared/worker-utils.js';
 import { snapshotDependencyHealth } from '../../../../shared/dependency-health.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from '../../../../shared/atomic-json.js';
+import { restrictSettingsFileForWindows } from '../../../../shared/settings-file-permissions.js';
 import { ConnectionStore } from '../../ConnectionStore.js';
 
 const toggleMcpSchema = z.object({
@@ -131,6 +132,16 @@ export class SettingsRoutes extends BaseRouteHandler {
     settings = ConnectionStore.applyToSettings(settings);
 
     writeJsonFileAtomic(settingsPath, settings);
+    // #23 — this is the PRIMARY teammate path (Settings UI activate) that writes
+    // a live CLAUDE_MEM_SERVER_API_KEY. writeJsonFileAtomic creates the file at
+    // the process umask (~0644, world-readable); tighten to 0600 (POSIX) and
+    // apply the best-effort Windows ACL, matching the installer's mergeSettings.
+    try {
+      chmodSync(settingsPath, 0o600);
+    } catch {
+      // Non-POSIX / permission-denied: fall back to profile ACLs (Windows).
+    }
+    restrictSettingsFileForWindows(settingsPath);
 
     clearPortCache();
 
@@ -313,6 +324,14 @@ export class SettingsRoutes extends BaseRouteHandler {
       }
 
       writeJsonFileAtomic(settingsPath, defaults);
+      // #23 — close the umask create-window at birth so the file is 0600 before
+      // it ever holds a key (POSIX); best-effort Windows ACL. See the POST path.
+      try {
+        chmodSync(settingsPath, 0o600);
+      } catch {
+        // Non-POSIX / permission-denied: fall back to profile ACLs (Windows).
+      }
+      restrictSettingsFileForWindows(settingsPath);
       logger.info('SETTINGS', 'Created settings file with defaults', { settingsPath });
     }
   }

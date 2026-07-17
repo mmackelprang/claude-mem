@@ -5,12 +5,13 @@ import { spawnSync } from 'child_process';
 import { loadTelemetryConfig, saveTelemetryConfig } from '../../services/telemetry/consent.js';
 import { captureCliEvent } from '../../services/telemetry/cli-telemetry.js';
 import { buildSpawnSyncInvocation, lookupWindowsCommand, spawnHidden } from '../../shared/spawn.js';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
 import { writeJsonFileAtomic as writeSettingsJsonAtomic } from '../../shared/atomic-json.js';
+import { restrictSettingsFileForWindows } from '../../shared/settings-file-permissions.js';
 import { loadClaudeMemEnv, saveClaudeMemEnv } from '../../shared/EnvManager.js';
 import { ensureWorkerStarted, type WorkerStartResult } from '../../services/worker-spawner.js';
 import { formatHostForUrl } from '../../shared/worker-utils.js';
@@ -758,8 +759,10 @@ async function runNpmInstallInMarketplace(summary: InstallSummary): Promise<void
   }, summary);
 }
 
-function mergeSettings(updates: Record<string, string>): boolean {
-  const path = USER_SETTINGS_PATH;
+export function mergeSettings(
+  updates: Record<string, string>,
+  path: string = USER_SETTINGS_PATH,
+): boolean {
   try {
     let current: Record<string, unknown> = {};
     if (existsSync(path)) {
@@ -781,6 +784,17 @@ function mergeSettings(updates: Record<string, string>): boolean {
     }
 
     writeSettingsJsonAtomic(path, current);
+    // #23 — settings.json may hold CLAUDE_MEM_SERVER_API_KEY. writeJsonFileAtomic
+    // preserves an existing file's mode but a freshly-created file opens at the
+    // process umask (~0644, world-readable); tighten to 0600 so the mergeSettings
+    // create-path matches persistServerSettings. POSIX-only; no-op on Windows,
+    // where restrictSettingsFileForWindows applies the best-effort ACL instead.
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      // Non-POSIX / permission-denied: fall back to profile ACLs (Windows).
+    }
+    restrictSettingsFileForWindows(path);
     return true;
   } catch (error: unknown) {
     log.error(`Failed to write settings to ${path}: ${error instanceof Error ? error.message : String(error)}`);

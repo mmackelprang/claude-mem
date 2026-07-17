@@ -32,6 +32,7 @@ import { chmodSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '../../utils/logger.js';
 import { readJsonFileWithBom, writeJsonFileAtomic } from '../../shared/atomic-json.js';
+import { restrictSettingsFileForWindows } from '../../shared/settings-file-permissions.js';
 import { createPostgresPool, type PostgresPool } from '../../storage/postgres/pool.js';
 import { parsePostgresConfig } from '../../storage/postgres/config.js';
 import { PostgresAuthRepository } from '../../storage/postgres/auth.js';
@@ -172,6 +173,10 @@ export function persistServerSettings(
   } catch {
     // Non-POSIX filesystems may reject chmod; settings file remains readable.
   }
+  // #23 — On Windows chmod(0o600) is a no-op, so the key-holding settings file
+  // relies on user-profile ACLs. Best-effort ACL tightening (non-fatal, no-op
+  // on POSIX). Do NOT add a second chmod here — the 0o600 above is the sole one.
+  restrictSettingsFileForWindows(settingsPath);
 }
 
 export function createRawApiKey(): string {
