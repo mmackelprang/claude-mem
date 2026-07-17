@@ -171,6 +171,25 @@ This is where installs silently break. Three settings decide whether you get a w
 > leaves an enabled provider idle on an empty queue, proving nothing. Full order in
 > [Start here](#start-here--what-this-document-is-and-is-not).
 
+> 💡 **Generate this block with the Settings-UI wizard — the primary path; §4.1–§4.2 are the reference/fallback.**
+> The provider + model + key block that §4.1–§4.2 describe is exactly what the viewer's **server-config wizard**
+> emits — and it bakes in the three things this section exists to make you get right:
+> - the **Haiku default** (`claude-haiku-4-5-20251001`), never the silent 3× Sonnet default;
+> - an **inline "Sonnet 4.6 costs about 3× Haiku 4.5 per observation" warning** the instant you pick Sonnet;
+> - the correct three variables — `CLAUDE_MEM_SERVER_PROVIDER=claude`, `ANTHROPIC_API_KEY`, and
+>   **`CLAUDE_MEM_SERVER_MODEL`** (not `CLAUDE_MEM_MODEL`) — in a ready-to-paste **Compose** fragment (or env-var list).
+>
+> **Where:** open the claude-mem viewer → **Settings → Connection → "Generate server config…"** (the collapsed helper on
+> a local worker), or the **Server configuration** section if a viewer runs in server context (that variant additionally
+> shows the server's CURRENT provider/model and a **real ingest** signal). Pick the model, paste your `sk-ant-…` key
+> (it **stays in your browser** — the wizard never stores it or calls the running server; that is Phase 1 by design),
+> then copy the block and apply it here exactly as below.
+>
+> **The wizard generates; it does not touch the running server** (live mutation is Phase 2, gated on viewer auth). So
+> §4.0's apply-to-TrueNAS step still runs, and §4.1–§4.2 remain the reference for *what each variable does* and the
+> failure modes when one is wrong or missing. **No viewer reachable?** Hand-author the block from §4.1–§4.2 — the
+> fallback.
+
 ### 4.0 How to apply a config change (do this first — the rest of §4 assumes it)
 
 Every §4 change is an **environment variable on a service in the `claude-mem` custom app's compose**. The YAML snippets
@@ -250,6 +269,15 @@ CLAUDE_MEM_SERVER_MODEL: claude-haiku-4-5-20251001
 CLAUDE_MEM_SERVER_PROVIDER: claude            # REQUIRED — checked before the key is even read
 ANTHROPIC_API_KEY: <your-anthropic-api-key>   # placeholder — never commit a real key
 ```
+
+> 🔑 **The key must be a metered `sk-ant-…` API key from console.anthropic.com — NOT your Claude subscription.** The
+> headless server has no macOS/desktop keychain and **cannot** use the OAuth token your *local* worker rides on (that
+> path is interactive/desktop-only). Server-side generation authenticates with a standalone Anthropic **API** key you
+> create at <https://console.anthropic.com> and pay for **per token** — this is a real, billed key, separate from any
+> Claude Pro/Max subscription. Paste that value (the wizard's key field shows the `sk-ant-…` shape for exactly this
+> reason). Until the worker has such a key **and** a provider, the server **ingests events but generates no searchable
+> observations** — a client can connect and its captures will land, yet `observation_search` stays empty. Driving that
+> whole loop (client → ingest → generation → recall) to working is roadmap **queue #30**.
 
 > ⚠️ **`ANTHROPIC_API_KEY` alone is not enough.** `buildServerGenerationProviderFromEnv()` returns null immediately if
 > `CLAUDE_MEM_SERVER_PROVIDER` is empty (`create-server-service.ts:242-244`) — the key at `:258` is **never reached**.
@@ -337,8 +365,14 @@ Audit existing keys (metadata only, no secrets): `... server api-key list --acti
 
 **This is the step that failed for 11 days — but it is a client-side task, and its canonical home is now
 [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).** Do not re-do it here; hand teammates that file. It owns the full procedure —
-the four `settings.json` keys, the file-permission lockdown, the installer caveat, and client-side verification — so it
-is not duplicated in this operator guide.
+the **Settings-UI connection flow (profiles + test-before-activate)** as the primary path, the four `settings.json` keys
+as the fallback, the file-permission lockdown, the installer caveat, and client-side verification — so it is not
+duplicated in this operator guide.
+
+> The client's **primary** path is now the viewer's **Settings → Connection** panel: add a profile, **Test** (which
+> probes reachable → API key → project and **refuses to activate a broken connection**, naming the failed step), then
+> **Activate**. That Test is what converts the silent 11-day fallback into a loud, specific failure — so when a teammate
+> says "it's not working," your first question is "what did the Test say?", not "did you edit the JSON right?"
 
 As the **operator**, you need only two facts from it when debugging "why isn't the teammate's data arriving":
 
@@ -396,7 +430,7 @@ sudo docker exec <postgres-container> \
 On a client configured per [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md) (see [§6](#6-point-a-client-at-the-server)), run an
 actual Claude Code session that does some tool work. This is the part that cannot be faked by a curl — the hooks must
 route to the server. The teammate's own client-side check (their `[server-fallback]` hook log) is covered in
-[`TEAM-CONFIG.md` §5](../../TEAM-CONFIG.md#5-verify-your-sessions-actually-ingest--a-200-is-not-verification); this
+[`TEAM-CONFIG.md` §6](../../TEAM-CONFIG.md#6-verify-your-sessions-actually-ingest--a-200-is-not-verification); this
 section is the **NAS-side** confirmation that rows actually landed.
 
 ### 7.3 Confirm the count moved
@@ -464,7 +498,7 @@ always, in a perfectly healthy stack**, because that container is *supposed* to 
 **The #1 failure, and the prime suspect for "the pilot has never ingested."** The client is writing to its own local
 SQLite and never contacting the NAS. **The diagnosis is entirely client-side — you cannot see it from the NAS**, so the
 step-by-step lives with the teammate procedure:
-[`TEAM-CONFIG.md` §6](../../TEAM-CONFIG.md#6-troubleshooting--what-you-can-diagnose-without-nas-access). In short: check
+[`TEAM-CONFIG.md` §7](../../TEAM-CONFIG.md#7-troubleshooting--what-you-can-diagnose-without-nas-access). In short: check
 the client's `~/.claude-mem/settings.json` for `CLAUDE_MEM_RUNTIME` — absent or not `server`/`server-beta` is the
 **truly silent path** (`resolveRuntimeContext()` returns `{runtime:'worker'}` with no log at all,
 `runtime-selector.ts:101-103`) — then grep the **client** hook log for `[server-fallback] reason=…`, which names the
@@ -474,7 +508,9 @@ exact missing key.
 > **client** — NAS logs cannot rule this out. **Look on the client**, and have the teammate follow
 > [`TEAM-CONFIG.md`](../../TEAM-CONFIG.md).
 
-Fix: the client sets all four keys ([`TEAM-CONFIG.md` §2](../../TEAM-CONFIG.md#2-set-the-four-keys--all-of-them-in-settingsjson-not-env-vars)).
+Fix: the client activates a working connection in the viewer's Settings
+([`TEAM-CONFIG.md` §2](../../TEAM-CONFIG.md#2-connect-in-the-settings-ui--the-primary-path)) — or sets the four keys by
+hand ([`TEAM-CONFIG.md` §3](../../TEAM-CONFIG.md#3-fallback--set-the-four-keys-by-hand-in-settingsjson)).
 Tracked as **queue #13**, which also owns correcting the pilot runbook's *"functionally complete"* claim — that was
 validated by **E2E test writes, not an actual teammate**.
 
@@ -515,7 +551,7 @@ See [§4.1](#41-set-claude_mem_server_model--or-silently-pay-3).
 ### 8.5 403 on write
 
 A teammate's writes 403 while reads succeed → their **key is read-only** (this is the operator-side fix for the
-teammate symptom in [`TEAM-CONFIG.md` §6](../../TEAM-CONFIG.md#6-troubleshooting--what-you-can-diagnose-without-nas-access)).
+teammate symptom in [`TEAM-CONFIG.md` §7](../../TEAM-CONFIG.md#7-troubleshooting--what-you-can-diagnose-without-nas-access)).
 `--scope` defaults to `memories:read`, and the pre-existing `teammate-readonly.key` is read-only. Mint a new key with
 `--scope memories:read,memories:write` and `--actor` ([§5](#5-mint-api-keys)), or migrate the existing key's scopes
 (`server api-key migrate-scopes <id> --scope ...`). Reads succeeding while writes 403 is the tell.
