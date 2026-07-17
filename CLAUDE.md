@@ -14,6 +14,26 @@ made, comparing by content hash. If it fails, the build did not reach the runnin
 before assuming your change is live. (Version strings can't answer this: a fork build and the upstream
 release it descends from can both report the same version.)
 
+## Test gate (auto-merge gate 2)
+
+```bash
+npm run test:gate          # runs the unit suite to completion and gates on the encoded baseline
+```
+
+Auto-merge policy gate 2 ("the full unit suite is green") is served by `npm run test:gate`, **not** raw
+`bun test`. Raw `bun test` never completes on this fork (2 upstream files hang at bun-init + 1 crashes the
+JUnit reporter). The gate excludes those 3 files (the `nonRunnable` list in `tests/known-failures.json`),
+runs the rest under a wall-clock watchdog, and exits non-zero on any of: a **new failure**, a **new hang**
+(watchdog fires ⇒ no XML), or an **unexpected pass** (a baselined test now passes — remove its entry).
+
+`tests/known-failures.json` encodes the standing, environment-specific failures inherited from upstream
+v13.11.0 (Windows path separators, POSIX file-mode, the #6 ComSpec spawn contract, the two source-standard
+assertions) as an **expected-failure baseline**, keyed by `{ file, exact bun testcase name }` and scoped by
+platform + env. It is a **fork-only** file — the mechanism edits **zero** upstream-owned test/src files
+(ADR 0002 §9). The #35 privacy sentinel is modelled as a `conditionalFailures` entry: expected-red when
+`CLAUDE_MEM_TEST_POSTGRES_URL` is unset, expected-green when set. Seed/refresh with
+`npm run test:gate:update` (under review only — never in CI).
+
 ## File Locations
 
 - **Source**: `<project-root>/src/`
