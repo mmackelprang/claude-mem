@@ -783,17 +783,17 @@ export function mergeSettings(
       current[key] = value;
     }
 
-    writeSettingsJsonAtomic(path, current);
-    // #23 — settings.json may hold CLAUDE_MEM_SERVER_API_KEY. writeJsonFileAtomic
-    // preserves an existing file's mode but a freshly-created file opens at the
-    // process umask (~0644, world-readable); tighten to 0600 so the mergeSettings
-    // create-path matches persistServerSettings. POSIX-only; no-op on Windows,
-    // where restrictSettingsFileForWindows applies the best-effort ACL instead.
+    // #23 — settings.json may hold CLAUDE_MEM_SERVER_API_KEY. Born at 0600 on
+    // create (createMode) so it's never world-readable, even briefly; an
+    // existing file's mode is preserved, then the chmod below tightens it.
+    // POSIX-only; on Windows restrictSettingsFileForWindows applies the ACL.
+    writeSettingsJsonAtomic(path, current, 0o600);
     try {
       chmodSync(path, 0o600);
     } catch {
       // Non-POSIX / permission-denied: fall back to profile ACLs (Windows).
     }
+    // One-shot CLI path — synchronous icacls is fine here.
     restrictSettingsFileForWindows(path);
     return true;
   } catch (error: unknown) {

@@ -165,7 +165,10 @@ export function persistServerSettings(
     flat.CLAUDE_MEM_SERVER_URL = values.serverBaseUrl;
   }
 
-  writeJsonFileAtomic(settingsPath, flat);
+  // #23 — born at 0600 on create (createMode) so the key never sits in a
+  // world-readable file even briefly; an existing file's mode is preserved by
+  // writeJsonFileAtomic, then tightened by the chmod below.
+  writeJsonFileAtomic(settingsPath, flat, 0o600);
   // Hooks read this file on every invocation; restrict permissions so other
   // local users cannot read the API key.
   try {
@@ -176,6 +179,7 @@ export function persistServerSettings(
   // #23 — On Windows chmod(0o600) is a no-op, so the key-holding settings file
   // relies on user-profile ACLs. Best-effort ACL tightening (non-fatal, no-op
   // on POSIX). Do NOT add a second chmod here — the 0o600 above is the sole one.
+  // Sync spawn is fine here: this is the one-shot bootstrap path, not a hot loop.
   restrictSettingsFileForWindows(settingsPath);
 }
 

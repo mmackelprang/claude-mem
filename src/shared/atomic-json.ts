@@ -46,8 +46,14 @@ export function ensureDirectoryExists(directoryPath: string): void {
  * resolved target, then fsync the parent directory for crash durability. A
  * crash mid-write leaves either the old contents or the new contents, never a
  * truncated file.
+ *
+ * `createMode` (optional): the permission mode to open the temp file with when
+ * the destination does not yet exist, so a freshly-created file is born at that
+ * mode instead of the process umask. When the destination already exists its
+ * current mode is preserved (unchanged contract). Used by the settings writers
+ * to close the umask create-window on a file that may hold an API key (#23).
  */
-export function writeJsonFileAtomic(filepath: string, data: any): void {
+export function writeJsonFileAtomic(filepath: string, data: any, createMode?: number): void {
   let resolved = filepath;
   try {
     if (lstatSync(filepath).isSymbolicLink()) {
@@ -78,7 +84,9 @@ export function writeJsonFileAtomic(filepath: string, data: any): void {
   try {
     mode = statSync(resolved).mode & 0o777;
   } catch {
-    // File does not exist yet; let openSync apply the process umask.
+    // File does not exist yet: use the caller's requested create mode if given
+    // (born at that mode, closing the umask window), else openSync applies umask.
+    mode = createMode;
   }
 
   let fd: number | undefined;
