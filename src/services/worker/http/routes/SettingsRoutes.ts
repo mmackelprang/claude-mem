@@ -2,7 +2,7 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import path from 'path';
-import { readFileSync, existsSync, renameSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, renameSync, mkdirSync, chmodSync } from 'fs';
 import { getPackageRoot, paths } from '../../../../shared/paths.js';
 import { logger } from '../../../../utils/logger.js';
 import { SettingsManager } from '../../SettingsManager.js';
@@ -13,6 +13,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { clearPortCache } from '../../../../shared/worker-utils.js';
 import { snapshotDependencyHealth } from '../../../../shared/dependency-health.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from '../../../../shared/atomic-json.js';
+import { restrictSettingsFileForWindowsAsync } from '../../../../shared/settings-file-permissions.js';
 import { ConnectionStore } from '../../ConnectionStore.js';
 
 const toggleMcpSchema = z.object({
@@ -130,7 +131,18 @@ export class SettingsRoutes extends BaseRouteHandler {
     // profile, in-memory, so the file is written once and stays consistent.
     settings = ConnectionStore.applyToSettings(settings);
 
-    writeJsonFileAtomic(settingsPath, settings);
+    // #23 — this is the PRIMARY teammate path (Settings UI activate) that writes
+    // a live CLAUDE_MEM_SERVER_API_KEY. Born at 0600 on create (createMode) so it
+    // is never world-readable; tighten an existing file with the chmod below.
+    // On Windows the ACL tightening is fire-and-forget (non-blocking) so the
+    // HTTP response isn't gated on the icacls child.
+    writeJsonFileAtomic(settingsPath, settings, 0o600);
+    try {
+      chmodSync(settingsPath, 0o600);
+    } catch {
+      // Non-POSIX / permission-denied: fall back to profile ACLs (Windows).
+    }
+    restrictSettingsFileForWindowsAsync(settingsPath);
 
     clearPortCache();
 
@@ -312,7 +324,15 @@ export class SettingsRoutes extends BaseRouteHandler {
         mkdirSync(dir, { recursive: true });
       }
 
-      writeJsonFileAtomic(settingsPath, defaults);
+      // #23 — born at 0600 so the file is owner-only before it can ever hold a
+      // key (POSIX); best-effort, non-blocking Windows ACL. See the POST path.
+      writeJsonFileAtomic(settingsPath, defaults, 0o600);
+      try {
+        chmodSync(settingsPath, 0o600);
+      } catch {
+        // Non-POSIX / permission-denied: fall back to profile ACLs (Windows).
+      }
+      restrictSettingsFileForWindowsAsync(settingsPath);
       logger.info('SETTINGS', 'Created settings file with defaults', { settingsPath });
     }
   }
