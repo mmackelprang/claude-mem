@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import pg from 'pg';
 import {
   bootstrapServerPostgresSchema,
@@ -14,9 +14,18 @@ import {
   buildSummaryJobPayload,
 } from '../../../src/server/runtime/SessionGenerationPolicy.js';
 import { processSessionSummaryResponse } from '../../../src/server/generation/processGeneratedResponse.js';
-import { quoteIdentifier } from '../../sdk/pg-isolation.js';
+import {
+  createIsolatedSchema,
+  poolForSchema,
+  dropSchema,
+} from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
+
+// #5 — flipped true inside the real markPrivateSession test; the always-on
+// sentinel at the bottom of this file asserts the P0 privacy guard actually
+// executed this run.
+let privacyGuardRan = false;
 
 describe('SessionGenerationPolicy (pure)', () => {
   it('summary job id is deterministic per server_session_id', () => {
@@ -58,13 +67,8 @@ describe('SessionGenerationPolicy (pure)', () => {
   });
 });
 
-describe('PostgresServerSessionsRepository + Postgres', () => {
-  if (!testDatabaseUrl) {
-    it.skip('requires CLAUDE_MEM_TEST_POSTGRES_URL', () => {});
-    return;
-  }
-
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
+describe.skipIf(!testDatabaseUrl)('PostgresServerSessionsRepository + Postgres', () => {
+  let pool: pg.Pool;
   let client: PostgresPoolClient;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
@@ -73,10 +77,13 @@ describe('PostgresServerSessionsRepository + Postgres', () => {
   let projectId: string;
 
   beforeEach(async () => {
+    // createIsolatedSchema opens its own client, CREATE SCHEMAs, and closes it.
+    schemaName = await createIsolatedSchema(testDatabaseUrl!, 'cm_phase6');
+    // poolForSchema pins search_path via the libpq startup packet, so EVERY
+    // pooled connection — including the one processSessionSummaryResponse opens
+    // from `pool` — lands in schemaName. This is the #8 fix.
+    pool = poolForSchema(testDatabaseUrl!, schemaName);
     client = await pool.connect();
-    schemaName = `cm_phase6_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
     await bootstrapServerPostgresSchema(client);
     storage = createPostgresStorageRepositories(client);
     sessions = new PostgresServerSessionsRepository(client);
@@ -88,18 +95,9 @@ describe('PostgresServerSessionsRepository + Postgres', () => {
   });
 
   afterEach(async () => {
-    if (!client) return;
-    try {
-      if (schemaName) {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      }
-    } finally {
-      client.release();
-    }
-  });
-
-  afterAll(async () => {
-    await pool.end();
+    if (client) client.release();
+    if (pool) await pool.end();
+    if (schemaName) await dropSchema(testDatabaseUrl!, schemaName);
   });
 
   it('create is idempotent on legacy no-platform external_session_id', async () => {
@@ -237,6 +235,7 @@ describe('PostgresServerSessionsRepository + Postgres', () => {
   });
 
   it('markPrivateSession persists privateSession=true on session metadata (summary-lane inheritance)', async () => {
+    privacyGuardRan = true; // #5 — record that the P0 privacy net executed this run
     // Upstream deleted ServerSessionRuntimeRepository; sessions.create() is the
     // supported way to obtain a session (it upserts on externalSessionId). The
     // assertion below is unchanged — this test guards ADR 0002 §4.3.3.
@@ -331,5 +330,22 @@ describe('PostgresServerSessionsRepository + Postgres', () => {
     if (outcome2.kind === 'completed') {
       expect(outcome2.observations.length).toBe(0);
     }
+  });
+});
+
+// #5 [P0] — guard-of-the-guard. This test is PURE (no Postgres) and NEVER gated, so a P0 privacy
+// safety-net can never silently pass by not running. See
+// docs/superpowers/specs/2026-07-17-postgres-privacy-guard-fail-loud-design.md (Option C).
+describe('P0 privacy guard-of-the-guard (always runs)', () => {
+  it('the R2 summary-lane privacy net (markPrivateSession) actually executed this run', () => {
+    if (!testDatabaseUrl) {
+      throw new Error(
+        'P0 privacy guard did not run: set CLAUDE_MEM_TEST_POSTGRES_URL to execute the R2 ' +
+          'summary-lane privacy net (markPrivateSession) in server-session-runtime.test.ts. ' +
+          'A P0 privacy test must never silently pass by not running (Backlog #5, ADR 0002 §4.3.3).',
+      );
+    }
+    // URL set: prove the real guard ran. Fails if it was skipped, deleted, or renamed away.
+    expect(privacyGuardRan).toBe(true);
   });
 });
