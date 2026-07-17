@@ -56,6 +56,9 @@ function failedStep(r: ProbeResult): StepResult | undefined { return r.steps.fin
 function failTitle(r: ProbeResult): string {
   const f = failedStep(r);
   if (!f) return 'test failed';
+  // A 404 during auth detection means the URL isn't a claude-mem server — never
+  // an auth failure. Title it accordingly.
+  if (f.code === 'incompatible_server') return 'not a claude-mem server';
   if (f.step === 'reachable') return 'can’t reach server';
   if (f.step === 'authenticated') return 'authentication failed';
   return 'project not usable';

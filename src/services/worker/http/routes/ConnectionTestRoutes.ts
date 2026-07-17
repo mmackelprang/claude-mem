@@ -137,39 +137,88 @@ export async function probeConnection(
   }
   steps.push({ step: 'reachable', status: 'pass', code: 'ok', http: 200, latencyMs: health.latencyMs, message: `Server responded (200) in ${health.latencyMs} ms.` });
 
-  // ---- Step 2: authenticated (GET /v1/projects, scope memories:read) ----
+  // ---- Step 2: authenticated (variant-detecting) ----
+  // There are two connectable claude-mem target types with DIVERGENT auth APIs:
+  //   • Postgres server-beta (ServerV1PostgresRoutes): auth = GET /v1/connect;
+  //     it has no bare /v1/projects (that 404s).
+  //   • Local worker (ServerV1Routes):                 auth = GET /v1/projects;
+  //     it has no /v1/connect (that 404s).
+  // Probe /v1/connect first; on 404 fall back to /v1/projects. If BOTH 404, the
+  // host answers /healthz but exposes neither claude-mem auth API → it is not a
+  // compatible server (NEVER a key error). Remember the matched variant so the
+  // project step below hits the right endpoint.
   if (!input.apiKey) {
     steps.push({ step: 'authenticated', status: 'fail', code: 'missing_key', message: 'This server requires an API key. Add one to continue.' });
     steps.push(skip('project'));
     return finish();
   }
   const authHeaders = { Authorization: `Bearer ${input.apiKey}`, 'X-Api-Key': input.apiKey };
-  const auth = await timedGet(fetchImpl, joinUrl(input.url, '/v1/projects'), authHeaders, timeoutMs);
-  if ('error' in auth) {
-    const code = auth.error === 'timeout' ? 'timeout' : 'unreachable';
+
+  const authTransportFail = (err: { error: 'timeout' | 'tls' | 'network' }): ProbeResult => {
+    const code = err.error === 'timeout' ? 'timeout' : 'unreachable';
     steps.push({ step: 'authenticated', status: 'fail', code, message: `Couldn’t complete the auth check against ${host}.` });
     steps.push(skip('project'));
     return finish();
-  }
-  if (auth.status === 401) {
-    steps.push({ step: 'authenticated', status: 'fail', code: 'missing_key', http: 401, message: 'This server requires an API key. Add one to continue.' });
+  };
+  const authMissing = (http: number): ProbeResult => {
+    steps.push({ step: 'authenticated', status: 'fail', code: 'missing_key', http, message: 'This server requires an API key. Add one to continue.' });
     steps.push(skip('project'));
     return finish();
-  }
-  if (auth.status >= 400) {
-    // Real server: 403 = invalid key OR insufficient scope (indistinguishable here).
-    steps.push({ step: 'authenticated', status: 'fail', code: 'unauthorized', http: auth.status, message: `The server rejected the API key (${auth.status}). Double-check the key.` });
+  };
+  const authBadKey = (http: number): ProbeResult => {
+    steps.push({ step: 'authenticated', status: 'fail', code: 'unauthorized', http, message: `The server rejected the API key (${http}). Double-check the key.` });
     steps.push(skip('project'));
     return finish();
-  }
-  steps.push({ step: 'authenticated', status: 'pass', code: 'ok', http: auth.status, message: 'API key accepted.' });
+  };
 
-  // ---- Step 3: project valid (GET /v1/projects/:id) ----
+  let variant: 'server' | 'worker';
+  const connect = await timedGet(fetchImpl, joinUrl(input.url, '/v1/connect'), authHeaders, timeoutMs);
+  if ('error' in connect) return authTransportFail(connect);
+  if (connect.status === 200) {
+    variant = 'server';
+  } else if (connect.status === 401) {
+    return authMissing(401);
+  } else if (connect.status === 403) {
+    return authBadKey(403);
+  } else if (connect.status === 404) {
+    // Not a Postgres server-beta — try the worker's auth endpoint.
+    const workerAuth = await timedGet(fetchImpl, joinUrl(input.url, '/v1/projects'), authHeaders, timeoutMs);
+    if ('error' in workerAuth) return authTransportFail(workerAuth);
+    if (workerAuth.status === 200) {
+      variant = 'worker';
+    } else if (workerAuth.status === 401) {
+      return authMissing(401);
+    } else if (workerAuth.status === 403) {
+      return authBadKey(403);
+    } else if (workerAuth.status === 404) {
+      // Both auth endpoints 404 → responds to /healthz but is not a claude-mem
+      // server we can talk to. This is NOT a key error.
+      steps.push({ step: 'authenticated', status: 'fail', code: 'incompatible_server', http: 404, message: `No compatible claude-mem server at ${host}. Check the URL — this doesn’t expose a claude-mem API.` });
+      steps.push(skip('project'));
+      return finish();
+    } else {
+      steps.push({ step: 'authenticated', status: 'fail', code: 'auth_failed', http: workerAuth.status, message: `Couldn’t verify the API key against ${host} (${workerAuth.status}).` });
+      steps.push(skip('project'));
+      return finish();
+    }
+  } else {
+    // Unexpected status from /v1/connect (e.g. 5xx) — do NOT claim a bad key.
+    steps.push({ step: 'authenticated', status: 'fail', code: 'auth_failed', http: connect.status, message: `Couldn’t verify the API key against ${host} (${connect.status}).` });
+    steps.push(skip('project'));
+    return finish();
+  }
+  steps.push({ step: 'authenticated', status: 'pass', code: 'ok', message: 'API key accepted.' });
+
+  // ---- Step 3: project valid (variant-aware) ----
+  // server-beta: GET /v1/projects/:id/jobs (200 ok, 404 project-not-found).
+  // worker:      GET /v1/projects/:id       (200 ok, 404 project-not-found).
   if (!input.projectId) {
     steps.push({ step: 'project', status: 'fail', code: 'missing_project', message: 'Enter a project ID for this connection.' });
     return finish();
   }
-  const proj = await timedGet(fetchImpl, joinUrl(input.url, `/v1/projects/${encodeURIComponent(input.projectId)}`), authHeaders, timeoutMs);
+  const encodedId = encodeURIComponent(input.projectId);
+  const projectPath = variant === 'server' ? `/v1/projects/${encodedId}/jobs` : `/v1/projects/${encodedId}`;
+  const proj = await timedGet(fetchImpl, joinUrl(input.url, projectPath), authHeaders, timeoutMs);
   if ('error' in proj) {
     steps.push({ step: 'project', status: 'fail', code: 'timeout', message: `Couldn’t verify the project against ${host}.` });
     return finish();

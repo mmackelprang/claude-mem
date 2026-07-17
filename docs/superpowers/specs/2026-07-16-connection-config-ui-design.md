@@ -55,7 +55,16 @@ Mark's ask lands on a real fault line in the codebase:
 
 ### 4.2 Test-before-activate (D3)
 
-A new endpoint (e.g. `POST /api/connection/test`) takes a candidate profile and returns a structured result per step: **reachable** (`GET <url>/healthz`) → **authenticated** (a scoped call with the key → 200 vs 401/403) → **project valid**. The UI blocks activation on any failure and shows *which* step failed (not a generic error) — so a wrong key reads as "auth failed," not "can't connect."
+A new endpoint (e.g. `POST /api/connection/test`) takes a candidate profile and returns a structured result per step: **reachable** (`GET <url>/healthz`) → **authenticated** (a scoped read-only call with the key → 200 vs 401/403) → **project valid**. The UI blocks activation on any failure and shows *which* step failed (not a generic error) — so a wrong key reads as "auth failed," not "can't connect."
+
+**Two target variants (verified in code — the probe MUST auto-detect them).** There are two connectable claude-mem server types with **divergent auth APIs**, and each 404s the other's endpoints:
+
+| Target | Runtime routes | Auth (step 2) | Project (step 3) |
+|---|---|---|---|
+| **Collection server / server-beta** (the NAS) | `ServerV1PostgresRoutes` (Postgres) | `GET /v1/connect` (readAuth) — **no bare `/v1/projects`** | `GET /v1/projects/:id/jobs` (200 ok / 404 not-found) |
+| **Local worker** | `ServerV1Routes` (SQLite) | `GET /v1/projects` (readAuth) — **no `/v1/connect`** | `GET /v1/projects/:id` (200 ok / 404 not-found) |
+
+The auth step probes `/v1/connect` first; on **404** it falls back to `/v1/projects`. **If both 404**, the host answers `/healthz` but exposes neither claude-mem auth API → the result is **"No compatible claude-mem server at this URL"**, *not* a key error. A **404 must never be rendered as "the server rejected the API key."** The matched variant is carried into step 3 so the project check hits the right endpoint. Both variants accept `Authorization: Bearer <key>` and `x-api-key`. (History: the original draft assumed `/v1/projects` for "the server," which 404s on the Postgres server-beta and mislabeled the 404 as a bad key — fixed in PR #30.)
 
 ### 4.3 Server-config wizard (D4)
 
