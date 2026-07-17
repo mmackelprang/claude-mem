@@ -65,16 +65,26 @@ export class OpenRouterObservationProvider implements ServerGenerationProvider {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  get modelId(): string {
+    return this.model;
+  }
+
   async generate(
     context: ServerGenerationContext,
     signal?: AbortSignal,
   ): Promise<ServerGenerationResult> {
-    const { prompt, skippedAll } = buildServerGenerationPrompt(context);
+    const { prompt, skippedAll, skipReason } = buildServerGenerationPrompt(context);
     if (skippedAll) {
+      const reason = skipReason ?? 'all_private';
+      logger.info('SDK', 'server generation skipped without billing provider', {
+        provider: this.providerLabel,
+        jobId: context.job.id,
+        reason,
+      });
       return {
-        rawText: '<skip_summary reason="all_events_private" />',
+        rawText: `<skip_summary reason="${reason}" />`,
         providerLabel: this.providerLabel,
-        modelId: this.model,
+        modelId: this.modelId,
       };
     }
 
@@ -135,7 +145,7 @@ export class OpenRouterObservationProvider implements ServerGenerationProvider {
       rawText,
       ...(tokensUsed !== undefined ? { tokensUsed } : {}),
       providerLabel: this.providerLabel,
-      modelId: this.model,
+      modelId: this.modelId,
     };
   }
 

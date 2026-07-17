@@ -216,6 +216,27 @@ export async function createServerService(
   return new ServerService({ graph });
 }
 
+// #19 — describe the resolved server generation model for a one-line startup
+// log. Server generation is cheap-by-default (the Claude provider default is
+// the Haiku tier, ~1/3 the Sonnet cost); Sonnet is an explicit
+// CLAUDE_MEM_SERVER_MODEL opt-in. This surfaces which model actually resolved
+// so an operator can see it at boot instead of silently running an unexpected
+// (and possibly pricier, if explicitly overridden) model. Pure + exported so it
+// is unit-testable without Postgres.
+export function describeServerModelResolution(input: {
+  providerLabel: string;
+  modelId: string;
+  envOverride: string | undefined;
+}): { message: string; overridden: boolean } {
+  const overridden = !!(input.envOverride && input.envOverride.trim());
+  return {
+    overridden,
+    message:
+      `server generation model resolved to '${input.modelId}' (provider=${input.providerLabel}, ` +
+      `${overridden ? 'set via CLAUDE_MEM_SERVER_MODEL' : 'provider default'})`,
+  };
+}
+
 function buildGenerationWorkerManager(
   pool: PostgresPool,
   queueManager: ServerQueueManager,
@@ -232,6 +253,18 @@ function buildGenerationWorkerManager(
       'no server generation provider configured; set CLAUDE_MEM_SERVER_PROVIDER and the matching API key to enable.',
     );
   }
+  // #19 — log the resolved model once, at worker-manager construction (startup),
+  // not per job, so the active generation model is never a silent surprise.
+  const resolution = describeServerModelResolution({
+    providerLabel: provider.providerLabel,
+    modelId: provider.modelId,
+    envOverride: process.env.CLAUDE_MEM_SERVER_MODEL,
+  });
+  logger.info('SYSTEM', resolution.message, {
+    provider: provider.providerLabel,
+    model: provider.modelId,
+    overridden: resolution.overridden,
+  });
   return new ActiveServerGenerationWorkerManager({
     pool,
     queueManager,

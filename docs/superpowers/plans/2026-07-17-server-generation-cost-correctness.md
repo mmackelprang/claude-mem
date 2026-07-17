@@ -5,10 +5,13 @@
 
 **Goal:** Close three server-generation cost/correctness gaps that share the *same code neighborhood*
 (providers + `prompt-builder.ts` + `create-server-service.ts`) and are all **unit-testable without Postgres**:
-- **#19 [cost]** — the resolved server generation model is invisible at startup, so a machine silently runs the
-  un-overridden `claude-sonnet-4-6` default at ~3× the Haiku-tier cost. Make it **loud at startup** (log the model +
-  whether it is the un-overridden default). **Do NOT change the default** (the current default is deliberate — the
-  prior default 404'd, see `ClaudeObservationProvider.ts:17-21`).
+- **#19 [cost]** — the resolved server generation model was invisible at startup, and the un-overridden default was
+  `claude-sonnet-4-6` at ~3× the Haiku-tier cost. **Decision (Mark, 2026-07-17): change the default instead of just
+  warning.** The Claude server default is now `claude-haiku-4-5-20251001` (cheap-by-default); Sonnet becomes an
+  explicit `CLAUDE_MEM_SERVER_MODEL` opt-in. The Haiku id is the same one the worker path already defaults to
+  (`SettingsDefaultsManager.ts`), so it is a known-valid model id and the prior default-change 404 risk (#2554) does
+  not apply. A one-line INFO startup log still surfaces the resolved model so it is never a silent surprise (the loud
+  WARN the plan originally proposed is moot now that the default is the cheap tier).
 - **#21 [cost/correctness]** — a summary job with **zero** unprocessed events still bills a live Anthropic call whose
   body is `<!-- empty after privacy stripping -->`. Short-circuit the empty batch.
 - **#22 [reliability]** — the summary lane has no aggregate size cap (only a per-event 16 KiB cap), so a large backlog
@@ -27,13 +30,15 @@ provider interface + a pure resolution-describer logged once at worker start.
 
 ## Global constraints
 
-- **Do not change the default model.** #19 is *observability only*. The default `claude-sonnet-4-6`
-  (`ClaudeObservationProvider.ts:22`) stays; the comment at `:17-21` explains why (the prior default 404'd). The recommended
-  override is `CLAUDE_MEM_SERVER_MODEL` (**not** `CLAUDE_MEM_MODEL`, which is the worker path). The worker-path Haiku
-  default is `claude-haiku-4-5-20251001` (`SettingsDefaultsManager.ts:109`) — use that exact id in the WARN's remedy.
-- **Pricing is verified but do not hardcode dollar amounts.** Confirmed via the claude-api skill against the current
-  table: `claude-sonnet-4-6` $3/$15 per MTok, `claude-haiku-4-5` $1/$5 per MTok = exactly 3.00× on both. The log says
-  "**~3x the Haiku-tier cost**" (qualitative, price-drift-proof), not a dollar figure.
+- **Change the default model to the cheap tier (Mark's override, 2026-07-17).** `DEFAULT_SERVER_CLAUDE_MODEL`
+  (`ClaudeObservationProvider.ts`) is now `claude-haiku-4-5-20251001` — the same id the worker path defaults to
+  (`SettingsDefaultsManager.ts:109`), so it is a known-valid model id. Sonnet is an explicit opt-in via
+  `CLAUDE_MEM_SERVER_MODEL` (**not** `CLAUDE_MEM_MODEL`, which is the worker path). #19 also keeps an INFO startup log
+  of the resolved model for observability; the originally-planned loud WARN is dropped (moot once the default is cheap).
+- **Pricing rationale (for the default choice), no hardcoded dollar amounts in code.** Confirmed via the claude-api
+  skill against the current table: `claude-sonnet-4-6` $3/$15 per MTok, `claude-haiku-4-5` $1/$5 per MTok = exactly
+  3.00× on both — which is *why* the default flips to Haiku. No dollar figure or ratio is emitted at runtime; the INFO
+  log names only the resolved model id (price-drift-proof).
 - **No billed calls in tests.** Every provider test injects a `fetchImpl` stub or asserts the pre-call short-circuit —
   never hits `api.anthropic.com`. The #21 test asserts the provider returns the synthetic skip **without** invoking the
   injected fetch.
@@ -191,10 +196,13 @@ if (omittedForBudget > 0) {
 
 ---
 
-### Task 3: #19 — make the resolved server model loud at startup
+### Task 3: #19 — cheap-by-default + surface the resolved server model at startup
 
-Expose `modelId` on the provider, add a pure resolution-describer, and log it once when the active worker manager is
-built. WARN when the un-overridden Claude default is in effect; INFO otherwise.
+**Shipped (Mark's override, 2026-07-17):** change `DEFAULT_SERVER_CLAUDE_MODEL` to `claude-haiku-4-5-20251001` so
+server generation is cheap-by-default; Sonnet is an explicit `CLAUDE_MEM_SERVER_MODEL` opt-in. Expose `modelId` on the
+provider, add a pure resolution-describer, and log the resolved model once (INFO) when the active worker manager is
+built. The originally-planned loud WARN on the un-overridden default is dropped — it is moot once the default is the
+cheap tier.
 
 **Files:**
 - Edit: `src/server/generation/providers/shared/types.ts` (interface)
@@ -227,31 +235,18 @@ get modelId(): string {
   Then use `this.modelId` in the synthetic skip response added in Task 1 Step 2 (Claude), and — for consistency —
   the existing `modelId: this.model` result fields may stay as-is (same value).
 
-- [ ] **Step 3: add a pure resolution-describer** in `create-server-service.ts`. Import `DEFAULT_SERVER_CLAUDE_MODEL`
-  from the Claude provider (already exported at `ClaudeObservationProvider.ts:22`).
+- [ ] **Step 3: add a pure resolution-describer** in `create-server-service.ts`. Because the default is now the cheap
+  Haiku tier, there is no silent-expensive-default to WARN about — the describer always returns an INFO-level message
+  (no `level` field, no dead WARN branch, no need to import `DEFAULT_SERVER_CLAUDE_MODEL` here).
 
 ```ts
-// create-server-service.ts — near the other helpers; import at top:
-//   import { ClaudeObservationProvider, DEFAULT_SERVER_CLAUDE_MODEL } from '../generation/providers/ClaudeObservationProvider.js';
-// (extend the existing ClaudeObservationProvider import rather than adding a second)
-
 export function describeServerModelResolution(input: {
   providerLabel: string;
   modelId: string;
   envOverride: string | undefined;
-}): { level: 'warn' | 'info'; message: string; overridden: boolean } {
+}): { message: string; overridden: boolean } {
   const overridden = !!(input.envOverride && input.envOverride.trim());
-  if (!overridden && input.providerLabel === 'claude' && input.modelId === DEFAULT_SERVER_CLAUDE_MODEL) {
-    return {
-      level: 'warn',
-      overridden: false,
-      message:
-        `server generation is using the un-overridden default model '${input.modelId}' ` +
-        `(~3x the Haiku-tier input/output cost); set CLAUDE_MEM_SERVER_MODEL=claude-haiku-4-5-20251001 to reduce cost`,
-    };
-  }
   return {
-    level: 'info',
     overridden,
     message:
       `server generation model resolved to '${input.modelId}' (provider=${input.providerLabel}, ` +
@@ -265,18 +260,17 @@ export function describeServerModelResolution(input: {
   `ActiveServerGenerationWorkerManager`:
 
 ```ts
-// create-server-service.ts buildGenerationWorkerManager, after the `if (!provider)` guard (:234)
+// create-server-service.ts buildGenerationWorkerManager, after the `if (!provider)` guard
 const resolution = describeServerModelResolution({
   providerLabel: provider.providerLabel,
   modelId: provider.modelId,
   envOverride: process.env.CLAUDE_MEM_SERVER_MODEL,
 });
-const logMeta = { provider: provider.providerLabel, model: provider.modelId };
-if (resolution.level === 'warn') {
-  logger.warn('SYSTEM', resolution.message, logMeta);
-} else {
-  logger.info('SYSTEM', resolution.message, logMeta);
-}
+logger.info('SYSTEM', resolution.message, {
+  provider: provider.providerLabel,
+  model: provider.modelId,
+  overridden: resolution.overridden,
+});
 
 return new ActiveServerGenerationWorkerManager({
   pool,
@@ -358,49 +352,52 @@ it('does not truncate or add a marker for a small batch (#22)', () => {
 > `makeContext` job shape (id, eventType, sourceAdapter, occurredAtEpoch, payload). Reuse the existing event shape in
 > `makeContext` if it already builds one.
 
-- [ ] **Step 3: #19 — pure describer** (`server-model-resolution.test.ts`).
+- [ ] **Step 3: #19 — Haiku default + pure describer** (`server-model-resolution.test.ts`). Assert (a) the Claude
+  server default is now `claude-haiku-4-5-20251001`, (b) `CLAUDE_MEM_SERVER_MODEL` (the `model` constructor option)
+  still overrides, and (c) the INFO-only describer reports the resolved model + `overridden` flag.
 
 ```ts
 import { describe, expect, it } from 'bun:test';
 import { describeServerModelResolution } from '../../../src/server/runtime/create-server-service.js';
-import { DEFAULT_SERVER_CLAUDE_MODEL } from '../../../src/server/generation/providers/ClaudeObservationProvider.js';
+import {
+  ClaudeObservationProvider,
+  DEFAULT_SERVER_CLAUDE_MODEL,
+} from '../../../src/server/generation/providers/ClaudeObservationProvider.js';
+
+describe('server generation model default (#19 cheap-by-default)', () => {
+  it('the Claude server default is the cheap Haiku tier', () => {
+    expect(DEFAULT_SERVER_CLAUDE_MODEL).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('a Claude provider with no model option resolves to the Haiku default', () => {
+    expect(new ClaudeObservationProvider({ apiKey: 'k' }).modelId).toBe(DEFAULT_SERVER_CLAUDE_MODEL);
+  });
+
+  it('CLAUDE_MEM_SERVER_MODEL still overrides the default', () => {
+    expect(new ClaudeObservationProvider({ apiKey: 'k', model: 'claude-sonnet-4-6' }).modelId)
+      .toBe('claude-sonnet-4-6');
+  });
+});
 
 describe('describeServerModelResolution (#19)', () => {
-  it('WARNs on the un-overridden Claude default', () => {
+  it('reports the provider default when no env override is set', () => {
     const r = describeServerModelResolution({
       providerLabel: 'claude',
       modelId: DEFAULT_SERVER_CLAUDE_MODEL,
       envOverride: undefined,
     });
-    expect(r.level).toBe('warn');
     expect(r.overridden).toBe(false);
-    expect(r.message).toContain('CLAUDE_MEM_SERVER_MODEL');
-    expect(r.message).toContain('claude-haiku-4-5-20251001');
+    expect(r.message).toContain('provider default');
   });
 
-  it('INFOs when the model is overridden via env', () => {
+  it('reports an env override when CLAUDE_MEM_SERVER_MODEL is set', () => {
     const r = describeServerModelResolution({
       providerLabel: 'claude',
-      modelId: 'claude-haiku-4-5-20251001',
-      envOverride: 'claude-haiku-4-5-20251001',
+      modelId: 'claude-sonnet-4-6',
+      envOverride: 'claude-sonnet-4-6',
     });
-    expect(r.level).toBe('info');
     expect(r.overridden).toBe(true);
-  });
-
-  it('INFOs for non-claude providers (no 3x default concept)', () => {
-    const r = describeServerModelResolution({
-      providerLabel: 'gemini',
-      modelId: 'gemini-2.5-flash',
-      envOverride: undefined,
-    });
-    expect(r.level).toBe('info');
-  });
-
-  it('exposes modelId on a constructed Claude provider', () => {
-    // import ClaudeObservationProvider at top of the file
-    const p = new ClaudeObservationProvider({ apiKey: 'k' });
-    expect(p.modelId).toBe(DEFAULT_SERVER_CLAUDE_MODEL);
+    expect(r.message).toContain('CLAUDE_MEM_SERVER_MODEL');
   });
 });
 ```
@@ -421,19 +418,20 @@ describe('describeServerModelResolution (#19)', () => {
 - [ ] **#22 bounded prompt:** the cap test proves the concatenated `<agent_events>` region is ≤ 256 KiB (+marker slack)
   and carries the omitted-count marker; the small-batch test proves byte-behavior is unchanged (no marker) and
   `skippedAll` stays `false` for a truncated non-empty batch.
-- [ ] **#19 loud default:** the describer WARNs (with the `CLAUDE_MEM_SERVER_MODEL` + `claude-haiku-4-5-20251001`
-  remedy) on the un-overridden Claude default and INFOs otherwise; `provider.modelId` is exposed. Default model is
-  **unchanged** (`grep DEFAULT_SERVER_CLAUDE_MODEL` still `= 'claude-sonnet-4-6'`).
+- [ ] **#19 cheap-by-default:** `DEFAULT_SERVER_CLAUDE_MODEL` is now `claude-haiku-4-5-20251001`
+  (`grep DEFAULT_SERVER_CLAUDE_MODEL`); a Claude provider with no `model` option resolves to it; `CLAUDE_MEM_SERVER_MODEL`
+  still overrides; `provider.modelId` is exposed; the INFO describer reports the resolved model + `overridden` flag.
 - [ ] **No new regressions:** targeted suites green; typecheck clean; the ~18 pre-existing failures (#7) are unchanged
   (do not attempt to fix them here). No assertions were added to the Postgres-gated files (#5/#8).
-- [ ] **Boundary:** no billed API calls in tests; no change to the model default; no edit to `docs/BUILDER_QUEUE.md`.
+- [ ] **Boundary:** no billed API calls in tests; the default model **changed to Haiku** per Mark's override; no edit to
+  `docs/BUILDER_QUEUE.md`.
 
 ### Test Plan (live UAT — optional, for the Tester)
 
 Server-runtime behavior; a live server-beta is host/billed and not required for merge. If a server-beta is available:
-start the generation worker **without** `CLAUDE_MEM_SERVER_MODEL` → confirm the startup WARN naming
-`claude-sonnet-4-6` + the `claude-haiku-4-5-20251001` remedy; set `CLAUDE_MEM_SERVER_MODEL` → confirm the INFO line and
-that no WARN appears. (Flag: live server-beta is billed — coordinator gate.)
+start the generation worker **without** `CLAUDE_MEM_SERVER_MODEL` → confirm the startup INFO line naming the resolved
+model as `claude-haiku-4-5-20251001` with `provider default`; set `CLAUDE_MEM_SERVER_MODEL=claude-sonnet-4-6` → confirm
+the INFO line names Sonnet with `set via CLAUDE_MEM_SERVER_MODEL`. (Flag: live server-beta is billed — coordinator gate.)
 
 ## Cross-references
 

@@ -19,8 +19,35 @@ import {
 import { OpenRouterObservationProvider } from '../../../src/server/generation/providers/OpenRouterObservationProvider.js';
 import { buildServerGenerationPrompt } from '../../../src/server/generation/providers/shared/prompt-builder.js';
 import type { ServerGenerationContext } from '../../../src/server/generation/providers/shared/types.js';
+import type { PostgresAgentEvent } from '../../../src/storage/postgres/agent-events.js';
 
-function makeContext(overrides: Partial<{ payload: unknown; serverSessionId: string | null }> = {}): ServerGenerationContext {
+function makeEvent(
+  overrides: Partial<{ id: string; payload: unknown; serverSessionId: string | null }> = {},
+): PostgresAgentEvent {
+  return {
+    id: overrides.id ?? 'evt-1',
+    projectId: 'proj-1',
+    teamId: 'team-1',
+    serverSessionId: overrides.serverSessionId ?? null,
+    sourceAdapter: 'api',
+    sourceEventId: null,
+    idempotencyKey: overrides.id ?? 'k',
+    eventType: 'tool_use',
+    payload: overrides.payload ?? { tool: 'bash', input: 'ls' },
+    metadata: {},
+    occurredAtEpoch: 0,
+    receivedAtEpoch: 0,
+    createdAtEpoch: 0,
+  };
+}
+
+function makeContext(
+  overrides: Partial<{
+    payload: unknown;
+    serverSessionId: string | null;
+    events: PostgresAgentEvent[];
+  }> = {},
+): ServerGenerationContext {
   return {
     job: {
       id: 'job-1',
@@ -47,23 +74,9 @@ function makeContext(overrides: Partial<{ payload: unknown; serverSessionId: str
       createdAtEpoch: 0,
       updatedAtEpoch: 0,
     },
-    events: [
-      {
-        id: 'evt-1',
-        projectId: 'proj-1',
-        teamId: 'team-1',
-        serverSessionId: overrides.serverSessionId ?? null,
-        sourceAdapter: 'api',
-        sourceEventId: null,
-        idempotencyKey: 'k',
-        eventType: 'tool_use',
-        payload: overrides.payload ?? { tool: 'bash', input: 'ls' },
-        metadata: {},
-        occurredAtEpoch: 0,
-        receivedAtEpoch: 0,
-        createdAtEpoch: 0,
-      },
-    ],
+    events:
+      overrides.events ??
+      [makeEvent({ payload: overrides.payload, serverSessionId: overrides.serverSessionId })],
     project: {
       projectId: 'proj-1',
       teamId: 'team-1',
@@ -151,6 +164,47 @@ describe('buildServerGenerationPrompt', () => {
     expect(result.prompt).toContain('<server_session_id>session-x</server_session_id>');
     expect(result.prompt).toContain('<project_name>demo</project_name>');
   });
+
+  // #21 — a zero-event batch is a skip with reason=no_events (not all_private),
+  // so the provider can short-circuit before any billed API call.
+  it('reports skipReason=no_events for an empty (zero-event) batch (#21)', () => {
+    const built = buildServerGenerationPrompt(makeContext({ events: [] }));
+    expect(built.skippedAll).toBe(true);
+    expect(built.skipReason).toBe('no_events');
+  });
+
+  // #21 — the all-private case is still distinct from the empty case.
+  it('reports skipReason=all_private when every event scrubs to empty (#21)', () => {
+    const built = buildServerGenerationPrompt(makeContext({ payload: '<private>secret</private>' }));
+    expect(built.skippedAll).toBe(true);
+    expect(built.skipReason).toBe('all_private');
+  });
+
+  // #21 — a non-skip build carries no skipReason.
+  it('leaves skipReason undefined for a normal non-skip batch (#21)', () => {
+    const built = buildServerGenerationPrompt(makeContext());
+    expect(built.skippedAll).toBe(false);
+    expect(built.skipReason).toBeUndefined();
+  });
+
+  // #22 — a large backlog is capped to the total-size budget with a marker,
+  // and a truncated-but-non-empty batch is NOT treated as a skip.
+  it('caps total summary payload and emits a truncation marker (#22)', () => {
+    const big = 'x'.repeat(20 * 1024); // per-event cap trims each to 16 KiB
+    const events = Array.from({ length: 40 }, (_, i) => makeEvent({ id: `e${i}`, payload: big }));
+    const built = buildServerGenerationPrompt(makeContext({ events }));
+    const region = built.prompt.split('<agent_events>')[1].split('</agent_events>')[0];
+    expect(region.length).toBeLessThanOrEqual(256 * 1024 + 200);
+    expect(built.prompt).toContain('events omitted');
+    expect(built.skippedAll).toBe(false);
+    expect(built.skipReason).toBeUndefined();
+  });
+
+  // #22 — a small batch is byte-behavior unchanged: no truncation, no marker.
+  it('does not truncate or add a marker for a small batch (#22)', () => {
+    const built = buildServerGenerationPrompt(makeContext());
+    expect(built.prompt).not.toContain('events omitted');
+  });
 });
 
 class FakeFetch {
@@ -186,6 +240,24 @@ describe('ClaudeObservationProvider', () => {
     const context = makeContext({ payload: '<private>secret</private>' });
     const result = await provider.generate(context);
     expect(result.rawText).toContain('<skip_summary');
+    expect(result.rawText).toContain('all_private');
+  });
+
+  // #21 — a zero-event summary batch must not bill a live Anthropic call.
+  it('skips a zero-event batch without calling the provider API (#21)', async () => {
+    let fetchCalls = 0;
+    const provider = new ClaudeObservationProvider({
+      apiKey: 'k',
+      fetchImpl: (async () => {
+        fetchCalls += 1;
+        return new Response('{}', { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+    const result = await provider.generate(makeContext({ events: [] }));
+    expect(fetchCalls).toBe(0);
+    expect(result.rawText).toContain('skip_summary');
+    expect(result.rawText).toContain('no_events');
+    expect(result.modelId).toBe('claude-haiku-4-5-20251001');
   });
 
   it('parses Anthropic Messages text content into rawText', async () => {

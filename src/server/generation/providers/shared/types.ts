@@ -29,5 +29,7 @@ export interface ServerGenerationResult {
 
 export interface ServerGenerationProvider {
   readonly providerLabel: 'claude' | 'gemini' | 'openrouter';
+  /** Resolved model id this provider will call — surfaced so startup can log it (#19). */
+  readonly modelId: string;
   generate(context: ServerGenerationContext, signal?: AbortSignal): Promise<ServerGenerationResult>;
 }
