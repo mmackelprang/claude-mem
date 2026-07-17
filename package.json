@@ -98,6 +98,8 @@
     "typecheck:root": "tsc --noEmit",
     "typecheck:viewer": "tsc --noEmit -p src/ui/viewer/tsconfig.json",
     "test": "bun test",
+    "test:gate": "node scripts/test-gate.mjs",
+    "test:gate:update": "node scripts/test-gate.mjs --update-baseline",
     "test:sqlite": "bun test tests/sqlite/",
     "test:agents": "bun test tests/worker/agents/",
     "test:search": "bun test tests/worker/search/",
