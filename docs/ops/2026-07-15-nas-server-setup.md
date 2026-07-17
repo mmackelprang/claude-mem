@@ -26,7 +26,7 @@ covers only the server side and what the operator needs to know about the client
 > **Execution order — the section numbers are not the running order.** Generation is downstream of ingest, and ingest
 > is what is broken, so:
 >
-> **[§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it) → [§5](#5-mint-api-keys) → [§6](#6-point-a-client-at-the-server) → [§7.1–7.3](#7-verify-ingest-for-real) (prove ingest) → [§4.1–4.2](#41-set-claude_mem_server_model--or-silently-pay-3) (model + generation) → [§7.4](#74-confirm-an-observation-actually-lands) (prove generation).**
+> **[§4.0](#40-how-to-apply-a-config-change-do-this-first--the-rest-of-4-assumes-it) → [§5](#5-mint-api-keys) → [§6](#6-point-a-client-at-the-server) → [§7.1–7.3](#7-verify-ingest-for-real) (prove ingest) → [§4.1–4.2](#41-set-claude_mem_server_model--haiku-is-the-default-now) (model + generation) → [§7.4](#74-confirm-an-observation-actually-lands) (prove generation).**
 >
 > Doing §4.2 first is not wrong, just useless on its own: an enabled provider sits idle on an empty queue until a
 > client actually reaches the box.
@@ -174,7 +174,8 @@ This is where installs silently break. Three settings decide whether you get a w
 > 💡 **Generate this block with the Settings-UI wizard — the primary path; §4.1–§4.2 are the reference/fallback.**
 > The provider + model + key block that §4.1–§4.2 describe is exactly what the viewer's **server-config wizard**
 > emits — and it bakes in the three things this section exists to make you get right:
-> - the **Haiku default** (`claude-haiku-4-5-20251001`), never the silent 3× Sonnet default;
+> - the **Haiku default** (`claude-haiku-4-5-20251001`) — now also the server's own code default (Backlog #19), so the
+>   wizard and an unset config agree on the cheap tier;
 > - an **inline "Sonnet 4.6 costs about 3× Haiku 4.5 per observation" warning** the instant you pick Sonnet;
 > - the correct three variables — `CLAUDE_MEM_SERVER_PROVIDER=claude`, `ANTHROPIC_API_KEY`, and
 >   **`CLAUDE_MEM_SERVER_MODEL`** (not `CLAUDE_MEM_MODEL`) — in a ready-to-paste **Compose** fragment (or env-var list).
@@ -228,30 +229,37 @@ sudo docker inspect <worker-container> --format '{{range .Config.Env}}{{println 
 (That prints the key's *presence*; it also prints its value — run it where nobody is looking over your shoulder, and
 never paste the output into a ticket.)
 
-### 4.1 Set `CLAUDE_MEM_SERVER_MODEL` — or silently pay 3×
+### 4.1 Set `CLAUDE_MEM_SERVER_MODEL` — Haiku is the default now
 
-**The variable is `CLAUDE_MEM_SERVER_MODEL`.** Set it on **`claude-mem-worker`** (the container that generates).
+**The variable is `CLAUDE_MEM_SERVER_MODEL`.** Set it on **`claude-mem-worker`** (the container that generates). As of
+Backlog #19 the default is the cheap Haiku tier, so leaving it unset is now the *safe* choice; you set this only to
+**opt into** a different (e.g. pricier Sonnet) model.
 
 - ❌ **`CLAUDE_MEM_MODEL` does nothing on the server.** It is the *local worker's* settings key
   (`SettingsDefaultsManager.ts:104`). Setting it here is a no-op with no warning.
 - ❌ **The server runtime never reads `settings.json`.** There is no settings tier server-side: it is
   **env var → code default**, full stop. Do not expect a settings file to influence it.
-- ⚠️ **Unset, the code default is `claude-sonnet-4-6`** (`DEFAULT_SERVER_CLAUDE_MODEL`,
-  `src/server/generation/providers/ClaudeObservationProvider.ts:22`), read at
-  `src/server/runtime/create-server-service.ts:261`.
+- ✅ **Unset, the code default is now the cheap `claude-haiku-4-5-20251001`** (`DEFAULT_SERVER_CLAUDE_MODEL`,
+  `src/server/generation/providers/ClaudeObservationProvider.ts`), read at
+  `src/server/runtime/create-server-service.ts`. **Changed in Backlog #19 (2026-07-17):** server generation is now
+  **cheap-by-default** — the old `claude-sonnet-4-6` default is gone, and Sonnet is an explicit opt-in. A one-line INFO
+  log at worker startup ("server generation model resolved to '…'") now names the resolved model, so it is no longer
+  silent either way.
 
 > ### 💰 Cost implication — state this plainly
 >
 > | Model | Input / output per 1M tokens | Notes |
 > |---|---|---|
-> | `claude-sonnet-4-6` | **$3 / $15** | **the silent default if you set nothing** |
-> | `claude-haiku-4-5-20251001` | **$1 / $5** | what Mark's local worker uses |
+> | `claude-haiku-4-5-20251001` | **$1 / $5** | **the default if you set nothing** (Backlog #19); what Mark's local worker uses |
+> | `claude-sonnet-4-6` | **$3 / $15** | ~3× the cost — an explicit `CLAUDE_MEM_SERVER_MODEL` opt-in only |
 >
-> **Leaving `CLAUDE_MEM_SERVER_MODEL` unset costs 3× per token, silently, forever.** Nothing warns you. The repo's
-> `docker-compose.yml` does **not** set it, so a stack deployed from the reference compose gets the Sonnet default.
-> Compose's own header also warns this path *"bills per token and can be EXPENSIVE at high observation volume."*
+> **Leaving `CLAUDE_MEM_SERVER_MODEL` unset now gives you the cheap Haiku default** — the previous "silent 3× Sonnet
+> forever" trap is closed. The repo's `docker-compose.yml` does **not** set it, and that is now fine: a stack deployed
+> from the reference compose gets Haiku. The cost risk has **inverted** — it is now *setting* `CLAUDE_MEM_SERVER_MODEL`
+> to Sonnet that makes you pay ~3×, so do that only as a deliberate decision.
 >
-> **Set it explicitly, even if you want Sonnet** — an explicit value is a decision; an absent one is an accident.
+> **The worker logs the resolved model once at startup** (INFO: "server generation model resolved to '…'"), so whichever
+> way it resolves is visible in the logs rather than silent.
 
 ```yaml
 # on the claude-mem-worker service:
@@ -544,9 +552,11 @@ sudo docker inspect <worker-container> --format '{{.RestartCount}} {{.State.Exit
 
 ### 8.4 Wrong model / unexpectedly large bill
 
-Generation works but costs 3× expected → `CLAUDE_MEM_SERVER_MODEL` is unset and you are on the `claude-sonnet-4-6`
-default. If you set `CLAUDE_MEM_MODEL`, **that did nothing** — wrong variable, no warning.
-See [§4.1](#41-set-claude_mem_server_model--or-silently-pay-3).
+Generation works but costs 3× expected → `CLAUDE_MEM_SERVER_MODEL` is **set to `claude-sonnet-4-6`** (the pricier
+opt-in). As of Backlog #19 the *unset* default is the cheap Haiku tier, so an unexpected 3× bill means the variable was
+set to Sonnet, not that it was left unset. Check the worker's startup log ("server generation model resolved to '…'")
+or `docker inspect` (§4.0) to see the resolved model. If you set `CLAUDE_MEM_MODEL`, **that did nothing** — wrong
+variable, no warning. See [§4.1](#41-set-claude_mem_server_model--haiku-is-the-default-now).
 
 ### 8.5 403 on write
 
