@@ -13,17 +13,16 @@ import {
   markGenerationFailed,
 } from '../../../src/server/generation/processGeneratedResponse.js';
 import { ModeManager } from '../../../src/services/domain/ModeManager.js';
-import { quoteIdentifier } from '../../sdk/pg-isolation.js';
+import {
+  createIsolatedSchema,
+  poolForSchema,
+  dropSchema,
+} from '../../sdk/pg-isolation.js';
 
 const testDatabaseUrl = process.env.CLAUDE_MEM_TEST_POSTGRES_URL;
 
-describe('processGeneratedResponse + markGenerationFailed', () => {
-  if (!testDatabaseUrl) {
-    it.skip('requires CLAUDE_MEM_TEST_POSTGRES_URL for Postgres integration', () => {});
-    return;
-  }
-
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
+describe.skipIf(!testDatabaseUrl)('processGeneratedResponse + markGenerationFailed', () => {
+  let pool: pg.Pool;
   let client: PostgresPoolClient;
   let schemaName: string;
   let storage: PostgresStorageRepositories;
@@ -36,10 +35,15 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     // The generation path reads the active ModeManager mode; load it so this
     // file runs standalone instead of relying on another test file's side effect.
     ModeManager.getInstance().loadMode('code');
+    // createIsolatedSchema opens its own client, CREATE SCHEMAs, and closes it.
+    schemaName = await createIsolatedSchema(testDatabaseUrl!, 'cm_phase5');
+    // poolForSchema pins search_path via the libpq startup packet, so EVERY
+    // pooled connection — including the one processGeneratedResponse opens from
+    // `pool` via withPostgresTransaction — lands in schemaName. This replaces
+    // the fire-and-forget pool.on('connect', …) monkey-patch this file used to
+    // carry (the exact anti-pattern pg-isolation.ts:10–15 was written to kill).
+    pool = poolForSchema(testDatabaseUrl!, schemaName);
     client = await pool.connect();
-    schemaName = `cm_phase5_${crypto.randomUUID().replaceAll('-', '_')}`;
-    await client.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
-    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
     await bootstrapServerPostgresSchema(client);
     storage = createPostgresStorageRepositories(client);
 
@@ -67,26 +71,12 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
       jobType: 'observation_generate_for_event',
     });
     jobId = job.id;
-
-    // Re-bind the storage layer to the pool so processGeneratedResponse's
-    // internal transactions see the test schema. We do this by setting
-    // search_path for new pool connections via on-connect hook, but pg's
-    // Pool does not expose that easily. Workaround: use the pool from the
-    // search_path-aware helper below. For these tests we monkey-patch the
-    // shared pool to set search_path on new connections.
-    pool.on('connect', (poolClient) => {
-      poolClient.query(`SET search_path TO ${quoteIdentifier(schemaName)}`).catch(() => {});
-    });
   });
 
   afterEach(async () => {
-    if (client) {
-      try {
-        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } catch {}
-      client.release();
-    }
-    pool.removeAllListeners('connect');
+    if (client) client.release();
+    if (pool) await pool.end();
+    if (schemaName) await dropSchema(testDatabaseUrl!, schemaName);
   });
 
   async function reloadJob() {
@@ -234,9 +224,19 @@ describe('processGeneratedResponse + markGenerationFailed', () => {
     });
     expect(second.kind).toBe('completed');
 
-    // Verify only one observation exists
-    const list = await storage.observations.listByProject({ projectId, teamId });
-    expect(list).toHaveLength(1);
+    // Verify exactly one observation row exists — the replay did NOT write a
+    // second. Count the table directly rather than via listByProject:
+    // processGeneratedResponse fails CLOSED to visibility='private' when the
+    // caller omits visibility (processGeneratedResponse.ts:340), and
+    // listByProject hides private rows from a null viewer — so the
+    // visibility-filtered read would report 0 even though the single row exists.
+    // The idempotency invariant under test is "one row, not two", which the raw
+    // count expresses without depending on the read-path visibility policy.
+    const count = await client.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM observations WHERE project_id = $1 AND team_id = $2',
+      [projectId, teamId],
+    );
+    expect(count.rows[0]?.n).toBe(1);
   });
 
   it('marks job completed with no observation when the response is a skip_summary', async () => {
