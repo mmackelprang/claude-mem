@@ -50,9 +50,11 @@ describe('assertServerRuntimeForCli — wrong-runtime guard (#2572)', () => {
   });
 });
 
-describe('Claude provider default model (#2554)', () => {
-  it('uses a current, valid model id (not the stale claude-3-5-sonnet-latest)', () => {
-    expect(DEFAULT_SERVER_CLAUDE_MODEL).toBe('claude-sonnet-4-6');
+describe('Claude provider default model (#2554 / #19)', () => {
+  it('uses the current cheap-by-default Haiku id (not the stale claude-3-5-sonnet-latest)', () => {
+    // #19 — server generation is cheap-by-default; the default is the Haiku tier,
+    // Sonnet is an explicit CLAUDE_MEM_SERVER_MODEL opt-in. Still a current, valid id.
+    expect(DEFAULT_SERVER_CLAUDE_MODEL).toBe('claude-haiku-4-5-20251001');
     expect(DEFAULT_SERVER_CLAUDE_MODEL).not.toBe('claude-3-5-sonnet-latest');
   });
 });

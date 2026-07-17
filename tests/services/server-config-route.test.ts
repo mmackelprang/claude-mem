@@ -12,7 +12,7 @@ describe('readServerGenerationConfig', () => {
     const cfg = readServerGenerationConfig(process.env);
     expect(cfg.provider).toBe('claude');
     expect(cfg.keyPresent).toBe(false);
-    expect(cfg.model).toBe('claude-sonnet-4-6'); // DEFAULT_SERVER_CLAUDE_MODEL, surfaced explicitly
+    expect(cfg.model).toBe('claude-haiku-4-5-20251001'); // DEFAULT_SERVER_CLAUDE_MODEL (#19 cheap-by-default), surfaced explicitly
   });
 
   it('reports keyPresent=true and never returns the key value', () => {

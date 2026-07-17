@@ -14,8 +14,9 @@ export interface ServerGenerationConfig {
  * Read the server's effective generation config from env — the same vars
  * create-server-service.ts reads (CLAUDE_MEM_SERVER_PROVIDER / _MODEL,
  * ANTHROPIC_API_KEY). The key VALUE is never returned — only presence + source.
- * The model default is surfaced EXPLICITLY (claude-sonnet-4-6) rather than left
- * implicit, so the UI can flag the silent 3× default (handoff §6.2/§12.3).
+ * The model default is surfaced EXPLICITLY (DEFAULT_SERVER_CLAUDE_MODEL, the
+ * cheap-by-default Haiku tier as of #19) rather than left implicit, so the UI can
+ * show the resolved model and flag the pricier Sonnet opt-in (handoff §6.2/§12.3).
  */
 export function readServerGenerationConfig(env: NodeJS.ProcessEnv): ServerGenerationConfig {
   const provider = (env.CLAUDE_MEM_SERVER_PROVIDER ?? '').trim().toLowerCase() || 'claude';
