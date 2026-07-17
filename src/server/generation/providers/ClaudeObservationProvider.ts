@@ -14,12 +14,14 @@ import type {
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-// #2554 — the previous default `claude-3-5-sonnet-latest` is stale and 404s on
-// the current Anthropic Messages API. Align with the repo's canonical default
-// model (CLAUDE_MEM_MODEL in src/ui/viewer/constants/settings.ts and the
-// installer's model list) so a server with no explicit CLAUDE_MEM_SERVER_MODEL
-// generates against a valid model id instead of failing every job with a 404.
-export const DEFAULT_SERVER_CLAUDE_MODEL = 'claude-sonnet-4-6';
+// #19 — server generation is cheap-by-default. The default is the Haiku tier
+// (~1/3 the Sonnet input/output cost); Sonnet becomes an explicit opt-in via
+// CLAUDE_MEM_SERVER_MODEL. This id is the same one the worker path already
+// defaults to (CLAUDE_MEM_MODEL in src/shared/SettingsDefaultsManager.ts), so
+// it is a known-valid model id on the current Anthropic Messages API — the
+// prior default-change 404 risk (#2554, when the stale
+// `claude-3-5-sonnet-latest` was the default) does not apply here.
+export const DEFAULT_SERVER_CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_MODEL = DEFAULT_SERVER_CLAUDE_MODEL;
 
 export interface ClaudeObservationProviderOptions {
@@ -55,18 +57,29 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  get modelId(): string {
+    return this.model;
+  }
+
   async generate(
     context: ServerGenerationContext,
     signal?: AbortSignal,
   ): Promise<ServerGenerationResult> {
-    const { prompt, skippedAll } = buildServerGenerationPrompt(context);
+    const { prompt, skippedAll, skipReason } = buildServerGenerationPrompt(context);
     if (skippedAll) {
-      // All events were scrubbed by privacy stripping. Don't bill the
-      // provider — return a synthetic skip response that parser accepts.
+      // Nothing worth summarizing — either a zero-event batch (#21) or every
+      // event scrubbed by privacy stripping. Don't bill the provider; return a
+      // synthetic skip response the parser accepts, tagged with the reason.
+      const reason = skipReason ?? 'all_private';
+      logger.info('SDK', 'server generation skipped without billing provider', {
+        provider: this.providerLabel,
+        jobId: context.job.id,
+        reason,
+      });
       return {
-        rawText: '<skip_summary reason="all_events_private" />',
+        rawText: `<skip_summary reason="${reason}" />`,
         providerLabel: this.providerLabel,
-        modelId: this.model,
+        modelId: this.modelId,
       };
     }
 
@@ -134,7 +147,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
       rawText,
       ...(tokensUsed !== undefined ? { tokensUsed } : {}),
       providerLabel: this.providerLabel,
-      modelId: this.model,
+      modelId: this.modelId,
     };
   }
 

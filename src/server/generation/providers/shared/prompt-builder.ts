@@ -36,9 +36,14 @@ export interface BuildServerPromptResult {
   readonly prompt: string;
   readonly hadPrivateContent: boolean;
   readonly skippedAll: boolean;
+  readonly skipReason?: 'no_events' | 'all_private';
 }
 
 const MAX_PAYLOAD_CHARS = 16 * 1024;
+// #22 — aggregate cap across ALL event blocks (the per-event cap above is the inner bound).
+// Character budget (not tokens) to keep this function pure/dependency-free; ~256 KiB sits well
+// under any current model context window even after scaffolding + char->token inflation.
+const MAX_TOTAL_PAYLOAD_CHARS = 256 * 1024;
 
 export function buildServerGenerationPrompt(
   context: ServerGenerationContext,
@@ -50,18 +55,52 @@ export function buildServerGenerationPrompt(
   let allEventsScrubbedToEmpty = true;
   const eventBlocks: string[] = [];
 
+  // #22 — enforce an aggregate character budget while collecting blocks. Events
+  // arrive oldest-first (ORDER BY e.occurred_at ASC, server-sessions.ts), so the
+  // budget fills from the oldest forward and a truncated summary covers a
+  // contiguous early slice. The per-event 16 KiB cap remains the inner bound.
+  let totalPayloadChars = 0;
+  let omittedForBudget = 0;
   for (const event of context.events) {
     const block = buildEventBlock(event);
     if (block.hadPrivate) {
       hadPrivateContent = true;
     }
-    if (block.body.length > 0) {
-      allEventsScrubbedToEmpty = false;
-      eventBlocks.push(block.body);
+    if (block.body.length === 0) {
+      continue;
     }
+    allEventsScrubbedToEmpty = false;
+    // Always include at least the first surviving block (bounded by the per-event
+    // 16 KiB cap), so a non-empty batch never becomes a spurious skip.
+    if (eventBlocks.length > 0 && totalPayloadChars + block.body.length > MAX_TOTAL_PAYLOAD_CHARS) {
+      omittedForBudget += 1;
+      continue;
+    }
+    eventBlocks.push(block.body);
+    totalPayloadChars += block.body.length;
+  }
+  if (omittedForBudget > 0) {
+    logger.warn('SDK', 'summary prompt truncated to total-size cap', {
+      omitted: omittedForBudget,
+      capBytes: MAX_TOTAL_PAYLOAD_CHARS,
+      included: eventBlocks.length,
+    });
+    eventBlocks.push(
+      `    <!-- ${omittedForBudget} events omitted: summary payload exceeded ${MAX_TOTAL_PAYLOAD_CHARS / 1024} KiB cap -->`,
+    );
   }
 
-  const skippedAll = context.events.length > 0 && allEventsScrubbedToEmpty;
+  // #21 — a genuinely empty batch (zero events) is a skip too, not just an
+  // all-private one. Distinguish the two so the provider's synthetic skip and
+  // logging carry an accurate reason and no billed empty call is made.
+  const noEvents = context.events.length === 0;
+  const allPrivate = !noEvents && allEventsScrubbedToEmpty;
+  const skippedAll = noEvents || allPrivate;
+  const skipReason: 'no_events' | 'all_private' | undefined = noEvents
+    ? 'no_events'
+    : allPrivate
+      ? 'all_private'
+      : undefined;
 
   const sessionTag = context.project.serverSessionId
     ? `\n  <server_session_id>${escapeXml(context.project.serverSessionId)}</server_session_id>`
@@ -93,7 +132,7 @@ export function buildServerGenerationPrompt(
     observationOutputSchema,
   ].join('\n');
 
-  return { prompt, hadPrivateContent, skippedAll };
+  return { prompt, hadPrivateContent, skippedAll, ...(skipReason ? { skipReason } : {}) };
 }
 
 interface EventBlockResult {
