@@ -1,0 +1,35 @@
+# Local UAT override for claude-mem server-beta.
+# Purpose: stand up a LOCAL collection server on 127.0.0.1:37778 to test the
+# connect-to-server / connection-config flow. NOT the NAS, NOT Mark's :37777 worker.
+#
+# Usage (from anywhere; --project-directory pins build context to the repo root):
+#   docker compose \
+#     --project-directory D:/prj/claude-mem \
+#     -p claude-mem-local-uat \
+#     -f D:/prj/claude-mem/docker-compose.yml \
+#     -f <scratch>/docker-compose.local-uat.yml \
+#     --env-file <scratch>/claude-mem-local-uat.env \
+#     up -d claude-mem-server
+#
+# Only `claude-mem-server` (+ its postgres/valkey/chroma deps) is started.
+# The `claude-mem-worker` (generation) service is placed behind a profile so a
+# bare `up` never starts it — an empty ANTHROPIC_API_KEY would crash-loop it
+# (queue #11). Generation is intentionally OFF for connection testing.
+
+services:
+  claude-mem-server:
+    # Publish the HTTP API on localhost:37778 instead of the default 37877.
+    # `!override` REPLACES the base port list (compose otherwise appends, which
+    # would leave the base 37877:37877 published too).
+    ports: !override
+      - "127.0.0.1:37778:37877"
+    environment:
+      # Bake in the cheaper model explicitly (avoids the silent sonnet 3x default).
+      # The server has generation disabled, but set it so the config is honest.
+      CLAUDE_MEM_SERVER_MODEL: claude-haiku-4-5-20251001
+
+  # Keep the generation worker OUT of the default `up`. It only starts if you
+  # explicitly pass `--profile generation` (which we do NOT for this UAT).
+  claude-mem-worker:
+    profiles:
+      - generation

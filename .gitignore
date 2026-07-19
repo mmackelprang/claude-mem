@@ -49,3 +49,7 @@ docker/install-test/
 
 # Local session report artifacts (not part of distribution)
 reports/
+
+# Local server-beta secrets — never commit (see docs/ops/2026-07-18-local-server-beta.md)
+claude-mem-local-uat.env
+.claude-mem-local-server/
