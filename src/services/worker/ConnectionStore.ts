@@ -75,8 +75,11 @@ export class ConnectionStore {
       logger.warn(
         'SETTINGS',
         'CLAUDE_MEM_CONNECTIONS failed to parse as JSON — discarding all saved connection profiles and falling back to the Local worker',
-        { rawLength: raw.length },
-        error instanceof Error ? error : new Error(String(error)),
+        // Deliberately NOT the Error object: a JSON.parse SyntaxError message
+        // echoes a window of the offending input, which for this key can
+        // include a CLAUDE_MEM_SERVER_API_KEY fragment. The error name adds all
+        // the diagnostic value the message would have ("not valid JSON").
+        { rawLength: raw.length, errorName: error instanceof Error ? error.name : 'unknown' },
       );
       return [];
     }

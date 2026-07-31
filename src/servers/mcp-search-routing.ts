@@ -11,18 +11,27 @@
 // whether the request can be served faithfully by the PG-backed /v1/search
 // (the same path observation_search uses) or must fall back to the worker.
 //
-// Kept side-effect-free (no import that runs work at module load) so it can be
-// unit-tested WITHOUT importing mcp-server.ts, which starts the stdio
-// transport at import time.
+// Kept free of imports that start a transport or perform writes at module
+// load, so it can be unit-tested WITHOUT importing mcp-server.ts, which starts
+// the stdio transport at import time.
 //
-// The `logger` import added below does NOT weaken that: utils/logger.ts starts
-// no transport and runs no work at module load (its log file and log level are
-// both resolved lazily on the first call), and its transitive graph is only
-// shared/paths + shared/hook-io + shared/atomic-json — all read-only at import.
-// mcp-server.ts, this module's own consumer, already imports it (line 5). The
-// stated goal — importing this module must not start the stdio transport — is
-// preserved, and tests/servers/mcp-search-routing.test.ts still imports only
-// this file.
+// The `logger` import added below preserves that goal but does NOT make this
+// module import-inert, and the difference matters:
+//   * utils/logger.ts starts no transport and opens no log file at import (the
+//     file handle and the log level are both resolved lazily on the first
+//     call), and its transitive graph is only shared/paths + shared/hook-io +
+//     shared/atomic-json.
+//   * BUT shared/paths.ts evaluates `export const DATA_DIR = resolveDataDir()`
+//     at module load, which existsSync/readFileSync's <dataDir>/settings.json
+//     and then FREEZES DATA_DIR. So importing this module now transitively
+//     performs a read-only settings probe and pins the data dir — a test that
+//     sets CLAUDE_MEM_DATA_DIR *after* importing this file is ignored.
+//     tests/preload.ts sets it first, so this is a constraint to preserve, not
+//     a live bug.
+//   * The first logger call additionally reads settings.json once for the log
+//     level (Logger.getLevel), memoized thereafter.
+// mcp-server.ts, this module's own consumer, already imports logger (line 5),
+// and tests/servers/mcp-search-routing.test.ts still imports only this file.
 
 import { normalizePlatformSource } from '../shared/platform-source.js';
 import { logger } from '../utils/logger.js';
@@ -92,8 +101,10 @@ function unsupportedServerFilters(args: SearchToolArgs): string[] {
 
 /**
  * Decide whether a `search` invocation routes to the server (/v1/search) or
- * the worker (/api/search). The decision itself is pure — no settings reads, no
- * throws, no network — the only side effect is a debug log of the outcome.
+ * the worker (/api/search). The returned route is a pure function of the
+ * arguments — no network, no throws, and no branch reads settings. The only
+ * side effect is a debug log of the outcome, which lazily reads settings.json
+ * once (memoized) to resolve the log level.
  *
  * @param args           the raw MCP tool arguments
  * @param serverAvailable true when selectRuntime()==='server' AND the server

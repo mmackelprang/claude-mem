@@ -66,8 +66,15 @@ export function buildObservationChromaDocs(
   // means the write path drifted from the schema. Such a doc indexes without
   // metadata.visibility and is therefore invisible to the read-side
   // visibility-filtered `where` (ChromaObservationRecall.buildWhere) — it is
-  // silently unrecallable. Aggregated per batch, never per observation, so a
-  // large backfill cannot flood the log.
+  // silently unrecallable. Aggregated per batch, never per observation: the
+  // bound is one line per buildObservationChromaDocs() call, so an N-batch
+  // backfill emits at most N lines rather than one per observation.
+  //
+  // NOTE: `visibility` is typed optional and observation-chroma-docs.test.ts
+  // covers the omitted case as supported, so a hypothetical non-Postgres caller
+  // could warn on every batch. The only live caller is the Postgres-backed
+  // ProviderObservationGenerator, whose rows are NOT NULL — for that caller a
+  // warn here really is drift.
   if (missingVisibility > 0) {
     logger.warn(
       'CHROMA_SYNC',
