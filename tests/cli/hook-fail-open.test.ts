@@ -17,39 +17,53 @@ import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 
 const PREVIOUS_DATA_DIR = process.env.CLAUDE_MEM_DATA_DIR;
-const TMP_DATA_DIR = mkdtempSync(join(tmpdir(), 'cmem-failopen-'));
-process.env.CLAUDE_MEM_DATA_DIR = TMP_DATA_DIR;
+const OWN_TMP_DATA_DIR = mkdtempSync(join(tmpdir(), 'cmem-failopen-'));
+process.env.CLAUDE_MEM_DATA_DIR = OWN_TMP_DATA_DIR;
 // The threshold crossing awaits captureCliEvent, whose consent chain defaults
 // to ON (opt-out). A unit test must never POST a real analytics event.
 process.env.CLAUDE_MEM_TELEMETRY = '0';
 
 const REPO_ROOT = join(import.meta.dir, '..', '..');
+
+// HARD SAFETY GATE — evaluated before any test and before the first write.
+// src/shared/paths.ts freezes DATA_DIR at FIRST evaluation, so the override
+// above only wins when this file is the first to import it (a solo run, and how
+// scripts/test-gate.mjs always runs it — one bun process per file). Under a
+// shared-process run (`bun test tests/cli/`) a sibling file may have imported
+// paths.ts first, in which case the frozen value is whatever tests/preload.ts
+// pinned — also a throwaway temp dir, and perfectly safe to use. So: ADOPT
+// whatever DATA_DIR actually resolved to, and hard-fail only if it is not a
+// throwaway. A test that silently clobbers the developer's real counter is
+// worse than no test.
+const { DATA_DIR: TMP_DATA_DIR } = await import('../../src/shared/paths.js');
+const REAL_DATA_DIR = join(homedir(), '.claude-mem');
+if (TMP_DATA_DIR === REAL_DATA_DIR || !TMP_DATA_DIR.startsWith(tmpdir())) {
+  throw new Error(
+    `#44 test safety: DATA_DIR resolved to ${TMP_DATA_DIR}, which is not a ` +
+    `throwaway temp dir. Refusing to run — these tests would clobber the real ` +
+    `hook-failure counter at ${REAL_DATA_DIR}.`,
+  );
+}
+
 const STATE_PATH = join(TMP_DATA_DIR, 'state', 'hook-failures.json');
 
-// Threshold 3, decay 30m, cooldown 10m — written BEFORE the first
-// loadFromFileOnce(), which caches once per process (hook-settings.ts:10-14).
-mkdirSync(TMP_DATA_DIR, { recursive: true });
-writeFileSync(
-  join(TMP_DATA_DIR, 'settings.json'),
-  JSON.stringify({
-    CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD: '3',
-    CLAUDE_MEM_HOOK_FAIL_DECAY_MINUTES: '30',
-    CLAUDE_MEM_HOOK_NOTICE_COOLDOWN_MINUTES: '10',
-  }),
-  'utf-8',
-);
-
-// HARD SAFETY GATE — runs before any test and before the first write. If
-// src/shared/paths.ts was already evaluated with the default DATA_DIR (e.g. a
-// sibling test file imported it earlier in the same process), the override
-// silently would NOT apply and every write below would land in the developer's
-// real ~/.claude-mem. Refuse to run rather than clobber it.
-const { DATA_DIR: RESOLVED_DATA_DIR } = await import('../../src/shared/paths.js');
-if (RESOLVED_DATA_DIR !== TMP_DATA_DIR) {
-  throw new Error(
-    `#44 test safety: CLAUDE_MEM_DATA_DIR override did not take effect ` +
-    `(DATA_DIR=${RESOLVED_DATA_DIR}, expected ${TMP_DATA_DIR}). Refusing to run — ` +
-    `these tests would clobber the real hook-failure counter.`,
+// Threshold 3, decay 30m, cooldown 10m. Only written when we own the dir: under
+// a shared-process run this directory belongs to every other test file too, and
+// dropping a settings.json into it could change their behaviour. Not writing it
+// costs nothing — these three values are exactly the shipped defaults
+// (SettingsDefaultsManager), so the assertions below hold either way. Written
+// BEFORE the first loadFromFileOnce(), which caches once per process
+// (hook-settings.ts:10-14).
+if (TMP_DATA_DIR === OWN_TMP_DATA_DIR) {
+  mkdirSync(TMP_DATA_DIR, { recursive: true });
+  writeFileSync(
+    join(TMP_DATA_DIR, 'settings.json'),
+    JSON.stringify({
+      CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD: '3',
+      CLAUDE_MEM_HOOK_FAIL_DECAY_MINUTES: '30',
+      CLAUDE_MEM_HOOK_NOTICE_COOLDOWN_MINUTES: '10',
+    }),
+    'utf-8',
   );
 }
 
@@ -72,7 +86,11 @@ afterAll(() => {
   } else {
     process.env.CLAUDE_MEM_DATA_DIR = PREVIOUS_DATA_DIR;
   }
-  rmSync(TMP_DATA_DIR, { recursive: true, force: true });
+  // Only ever delete the dir we created. When TMP_DATA_DIR is the preload's
+  // shared per-run dir, removing it would rip the directory out from under the
+  // frozen module constants of every later test file in this process.
+  rmSync(OWN_TMP_DATA_DIR, { recursive: true, force: true });
+  if (TMP_DATA_DIR !== OWN_TMP_DATA_DIR) rmSync(STATE_PATH, { force: true });
 });
 
 function writeState(state: Record<string, number>): void {

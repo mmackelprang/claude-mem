@@ -14,8 +14,10 @@ import type { HookResult } from '../../src/cli/types.js';
 // Windows Terminal tab-accumulation rationale (per CLAUDE.md):
 // The exit-0-on-error policy is intentional — non-zero exits keep Windows
 // Terminal tabs open. exitGraceful() exits 0 and drops buffered stderr for the
-// transient worker-unavailable path. emitBlockingError() exits 2 only for the
-// fail-loud counter (recordWorkerUnreachable) and unrecoverable handler errors.
+// transient worker-unavailable path. emitBlockingError() exits 2 for
+// unrecoverable handler errors ONLY — since #44 the fail-loud counter
+// (recordWorkerUnreachable) no longer routes through it, because a memory
+// plugin must never be able to block a prompt. See the contract test below.
 //
 // These tests assert the IO-discipline CONTRACT at the seam level rather than
 // spawning the built worker daemon, because worker-service auto-spawns a Bun

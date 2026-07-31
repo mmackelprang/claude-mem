@@ -114,7 +114,7 @@ async function executeHookPipeline(
 
   // MODEL_CONTEXT: the only stdout JSON emit, via the platform adapter.
   emitModelContext(adapter, finalResult);
-  const exitCode = result.exitCode ?? HOOK_EXIT_CODES.SUCCESS;
+  const exitCode = finalResult.exitCode ?? HOOK_EXIT_CODES.SUCCESS;
   exitGraceful(options);
   return exitCode;
 }
@@ -128,9 +128,10 @@ export async function hookCommand(platform: string, event: string, options: Hook
   // Hook IO Discipline (issue #2292):
   // We BUFFER stderr during handler execution so that unsolicited writes from
   // third-party libraries don't leak into model context. The buffer is FLUSHED
-  // only when we choose to surface (logger errors at the catch-all branch,
-  // fail-loud counter from worker-utils, blocking-error path). Successful exits
-  // drop the buffer — preserving the original "quiet on success" behavior.
+  // only when we choose to surface (logger errors at the catch-all branch, the
+  // blocking-error path, and — since #44 — the two degraded-worker sites below,
+  // which flush explicitly because exitGraceful drops the buffer). Successful
+  // exits drop the buffer — preserving the original "quiet on success" behavior.
   //
   // To bypass the buffer for a specific write, use emitDiagnostic /
   // emitBlockingError from src/shared/hook-io.ts. Direct process.stderr.write

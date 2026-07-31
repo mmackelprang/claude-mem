@@ -533,10 +533,14 @@ let aliveCache: boolean | null = null;
 export async function ensureWorkerAliveOnce(): Promise<boolean> {
   if (aliveCache !== null) return aliveCache;
   aliveCache = await ensureWorkerRunning();
-  // #44 reset path: a reachable worker clears the streak IMMEDIATELY, including
-  // on hook paths that never issue a worker HTTP call (the Codex MCP context
-  // path, context.ts:80-85). Pre-#44 the only reset was a completed round-trip,
-  // so those paths could never clear a stale count.
+  // #44 reset path: a reachable worker clears the streak as soon as it answers,
+  // BEFORE the request that follows. The two pre-existing resets fire only after
+  // a response arrives (executeWithWorkerFallback), so a call that threw or timed
+  // out mid-flight used to leave a stale streak armed even though the worker was
+  // demonstrably up. NOTE: executeWithWorkerFallback is this function's only
+  // caller, so hook paths that never issue worker HTTP at all (the Codex MCP
+  // context path, context.ts:80-85) are still NOT covered here — that gap is
+  // tracked as its own queue row.
   if (aliveCache) resetWorkerFailureCounter();
   return aliveCache;
 }
