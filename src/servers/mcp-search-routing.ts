@@ -14,8 +14,18 @@
 // Kept side-effect-free (no import that runs work at module load) so it can be
 // unit-tested WITHOUT importing mcp-server.ts, which starts the stdio
 // transport at import time.
+//
+// The `logger` import added below does NOT weaken that: utils/logger.ts starts
+// no transport and runs no work at module load (its log file and log level are
+// both resolved lazily on the first call), and its transitive graph is only
+// shared/paths + shared/hook-io + shared/atomic-json — all read-only at import.
+// mcp-server.ts, this module's own consumer, already imports it (line 5). The
+// stated goal — importing this module must not start the stdio transport — is
+// preserved, and tests/servers/mcp-search-routing.test.ts still imports only
+// this file.
 
 import { normalizePlatformSource } from '../shared/platform-source.js';
+import { logger } from '../utils/logger.js';
 import type { ServerSearchObservationsRequest } from '../services/hooks/server-client.js';
 
 export interface SearchToolArgs {
@@ -60,26 +70,30 @@ export type SearchRoute = SearchRouteServer | SearchRouteWorker;
 // still route to the server. `project` (a project NAME filter on the worker)
 // is unsupported because /v1/search is scoped to the single projectId bound to
 // the API key, not an arbitrary project name.
-function hasUnsupportedServerFilter(args: SearchToolArgs): boolean {
-  return (
-    args.project !== undefined ||
-    args.obs_type !== undefined ||
-    args.dateStart !== undefined ||
-    args.dateEnd !== undefined ||
-    args.offset !== undefined ||
-    args.orderBy !== undefined ||
-    args.files !== undefined ||
-    args.filePath !== undefined ||
-    args.concepts !== undefined ||
-    args.concept !== undefined ||
-    args.isFolder !== undefined ||
-    args.platform_source !== undefined
-  );
+const UNSUPPORTED_SERVER_FILTER_KEYS = [
+  'project',
+  'obs_type',
+  'dateStart',
+  'dateEnd',
+  'offset',
+  'orderBy',
+  'files',
+  'filePath',
+  'concepts',
+  'concept',
+  'isFolder',
+  'platform_source',
+] as const satisfies ReadonlyArray<keyof SearchToolArgs>;
+
+/** The offending keys, so the fallback log can name WHICH filter forced it. */
+function unsupportedServerFilters(args: SearchToolArgs): string[] {
+  return UNSUPPORTED_SERVER_FILTER_KEYS.filter(key => args[key] !== undefined);
 }
 
 /**
  * Decide whether a `search` invocation routes to the server (/v1/search) or
- * the worker (/api/search). Pure: no I/O, no settings reads, no throws.
+ * the worker (/api/search). The decision itself is pure — no settings reads, no
+ * throws, no network — the only side effect is a debug log of the outcome.
  *
  * @param args           the raw MCP tool arguments
  * @param serverAvailable true when selectRuntime()==='server' AND the server
@@ -98,12 +112,14 @@ export function decideSearchRoute(
       ? serverProjectId
       : undefined;
 
+  const unsupportedFilters = unsupportedServerFilters(args);
+
   if (
     serverAvailable &&
     projectId !== undefined &&
     hasText &&
     typeIsObservations &&
-    !hasUnsupportedServerFilter(args)
+    unsupportedFilters.length === 0
   ) {
     const request: ServerSearchObservationsRequest = {
       projectId,
@@ -113,8 +129,30 @@ export function decideSearchRoute(
         ? { platformSource: normalizePlatformSource(args.platformSource) }
         : {}),
     };
+    // Never log `query` — it is user prompt text.
+    logger.debug('SEARCH', 'search routed to server (/v1/search)', undefined, {
+      projectId,
+      limit: request.limit ?? null,
+      platformSource: request.platformSource ?? null,
+    });
     return { target: 'server', request };
   }
+
+  // The #3082 symptom ("search returns 0 results in server mode") is really
+  // "the request silently fell back to the frozen local worker". Recording the
+  // precondition that failed turns that into a one-line log read.
+  const fallbackReasons: string[] = [];
+  if (!serverAvailable) fallbackReasons.push('serverUnavailable');
+  if (projectId === undefined) fallbackReasons.push('missingProjectId');
+  if (!hasText) fallbackReasons.push('noQueryText');
+  if (!typeIsObservations) fallbackReasons.push('nonObservationsType');
+  if (unsupportedFilters.length > 0) {
+    fallbackReasons.push(`unsupportedFilters(${unsupportedFilters.join(',')})`);
+  }
+  logger.debug('SEARCH', 'search fell back to worker (/api/search)', undefined, {
+    fallbackReasons,
+    type: typeof args.type === 'string' ? args.type : null,
+  });
 
   return { target: 'worker' };
 }

@@ -2,6 +2,7 @@
 import express, { Request, Response } from 'express';
 import type { Database } from 'bun:sqlite';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
+import { logger } from '../../../../utils/logger.js';
 
 export interface IngestStatus {
   lastObservationAt: number | null; // epoch seconds (created_at_epoch)
@@ -35,6 +36,27 @@ export class IngestStatusRoutes extends BaseRouteHandler {
 
   private handleGet = this.wrapHandler((_req: Request, res: Response): void => {
     const nowEpoch = Math.floor(Date.now() / 1000);
-    res.json(queryIngestStatus(this.getDatabase(), WINDOW_SECONDS, nowEpoch));
+    const status = queryIngestStatus(this.getDatabase(), WINDOW_SECONDS, nowEpoch);
+
+    // "No observation in the whole window" is the capture-outage signature. The
+    // UI shows it, but nothing lands in the log, so a post-hoc investigation has
+    // no record of when capture stopped. WARN only on the dead case; the healthy
+    // path stays at debug so a polling UI cannot flood the log.
+    if (status.lastObservationAt === null || status.countLastWindow === 0) {
+      logger.warn('INGEST', 'ingest-status: no observations ingested in the window', undefined, {
+        window: status.window,
+        countLastWindow: status.countLastWindow,
+        lastObservationAt: status.lastObservationAt,
+        secondsSinceLastObservation:
+          status.lastObservationAt === null ? null : nowEpoch - status.lastObservationAt,
+      });
+    } else {
+      logger.debug('INGEST', 'ingest-status: observations are arriving', undefined, {
+        window: status.window,
+        countLastWindow: status.countLastWindow,
+      });
+    }
+
+    res.json(status);
   });
 }

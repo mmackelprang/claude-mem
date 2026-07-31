@@ -2,6 +2,7 @@
 import express, { Request, Response } from 'express';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { DEFAULT_SERVER_CLAUDE_MODEL } from '../../../../server/generation/providers/ClaudeObservationProvider.js';
+import { logger } from '../../../../utils/logger.js';
 
 export interface ServerGenerationConfig {
   provider: string;
@@ -38,6 +39,18 @@ export class ServerConfigRoutes extends BaseRouteHandler {
   }
 
   private handleGet = this.wrapHandler((_req: Request, res: Response): void => {
-    res.json(readServerGenerationConfig(process.env));
+    const config = readServerGenerationConfig(process.env);
+    // The recurring operator questions are "why is my server on Sonnet?" and
+    // "why does it say my key is missing?" — both answerable only from the
+    // RESOLVED triple plus which env var supplied the key. keySource is a
+    // variable NAME, never the key value (see this file's contract above).
+    logger.debug('HTTP', 'server-config: resolved generation config', undefined, {
+      provider: config.provider,
+      model: config.model,
+      keyPresent: config.keyPresent,
+      keySource: config.keySource,
+      modelIsDefault: config.model === DEFAULT_SERVER_CLAUDE_MODEL,
+    });
+    res.json(config);
   });
 }

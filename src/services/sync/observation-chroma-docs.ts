@@ -11,7 +11,11 @@
 // OVERRIDE-C: import the ChromaDocument shape TYPE-ONLY so this module never
 // pulls ChromaSync's runtime graph (bun:sqlite via lazy require) into the SDK
 // bundle. Do NOT add any value-level import from ChromaSync.ts here.
+// (The `logger` value import below is deliberately NOT covered by that rule:
+// utils/logger.ts pulls only shared/paths + shared/hook-io + shared/atomic-json,
+// none of which reach bun:sqlite. The constraint is scoped to ChromaSync.ts.)
 import type { ChromaDocument } from './ChromaSync.js';
+import { logger } from '../../utils/logger.js';
 
 export interface ChromaIndexableObservation {
   id: string;
@@ -30,7 +34,8 @@ export function buildObservationChromaDocs(
   observations: ChromaIndexableObservation[],
   scope: { projectId: string; teamId: string },
 ): ChromaDocument[] {
-  return observations.map((observation) => {
+  let missingVisibility = 0;
+  const docs = observations.map((observation) => {
     const metadata: Record<string, string | number> = {
       projectId: scope.projectId,
       teamId: scope.teamId,
@@ -50,7 +55,32 @@ export function buildObservationChromaDocs(
     const visibility = observation.visibility;
     if (typeof visibility === 'string' && visibility.length > 0) {
       metadata.visibility = visibility;
+    } else {
+      missingVisibility++;
     }
     return { id: observation.id, document: observation.content, metadata };
   });
+
+  // Drift alarm for the seam documented above: a live Postgres row ALWAYS
+  // carries visibility (NOT NULL, default 'team'), so an absent/empty value
+  // means the write path drifted from the schema. Such a doc indexes without
+  // metadata.visibility and is therefore invisible to the read-side
+  // visibility-filtered `where` (ChromaObservationRecall.buildWhere) — it is
+  // silently unrecallable. Aggregated per batch, never per observation, so a
+  // large backfill cannot flood the log.
+  if (missingVisibility > 0) {
+    logger.warn(
+      'CHROMA_SYNC',
+      'Indexing observations without metadata.visibility — these will not match the read-side visibility filter',
+      undefined,
+      {
+        missingVisibility,
+        batchSize: observations.length,
+        projectId: scope.projectId,
+        teamId: scope.teamId,
+      },
+    );
+  }
+
+  return docs;
 }
