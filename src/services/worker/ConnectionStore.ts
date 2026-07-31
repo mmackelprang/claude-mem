@@ -10,6 +10,8 @@
  * *consumption* is unchanged — this is purely a manager on top.
  */
 
+import { logger } from '../../utils/logger.js';
+
 export const LOCAL_WORKER_ID = 'local-worker';
 
 /**
@@ -51,13 +53,34 @@ export class ConnectionStore {
     if (!raw) return [];
     try {
       const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
+      if (!Array.isArray(parsed)) {
+        // Never log `raw` itself — a profile carries CLAUDE_MEM_SERVER_API_KEY.
+        logger.warn(
+          'SETTINGS',
+          'CLAUDE_MEM_CONNECTIONS is not a JSON array — discarding all saved connection profiles and falling back to the Local worker',
+          { parsedType: parsed === null ? 'null' : typeof parsed, rawLength: raw.length },
+        );
+        return [];
+      }
       return parsed.filter(
         (p): p is ConnectionProfile =>
           !!p && typeof p.id === 'string' && typeof p.name === 'string' &&
           (p.runtime === 'worker' || p.runtime === 'server'),
       );
-    } catch {
+    } catch (error: unknown) {
+      // Silent data loss otherwise: a malformed CLAUDE_MEM_CONNECTIONS drops
+      // EVERY saved profile, so applyToSettings resolves the Local worker as
+      // active and wipes the canonical server keys on the next save — the exact
+      // silent fallback the adoption block below exists to eliminate.
+      logger.warn(
+        'SETTINGS',
+        'CLAUDE_MEM_CONNECTIONS failed to parse as JSON — discarding all saved connection profiles and falling back to the Local worker',
+        // Deliberately NOT the Error object: a JSON.parse SyntaxError message
+        // echoes a window of the offending input, which for this key can
+        // include a CLAUDE_MEM_SERVER_API_KEY fragment. The error name adds all
+        // the diagnostic value the message would have ("not valid JSON").
+        { rawLength: raw.length, errorName: error instanceof Error ? error.name : 'unknown' },
+      );
       return [];
     }
   }
