@@ -10,12 +10,14 @@ import {
   emitBlockingError,
   exitGraceful,
   resetHookIoState,
+  type HookStderrBuffer,
 } from '../shared/hook-io.js';
 import {
   recordWorkerUnreachable,
   setActiveHookType,
   getActiveHookType,
 } from '../shared/worker-utils.js';
+import { attachDegradedNotice, getWorkerDegraded } from '../shared/hook-degraded-notice.js';
 import { captureCliEvent } from '../services/telemetry/cli-telemetry.js';
 import { logger } from '../utils/logger.js';
 
@@ -86,16 +88,33 @@ async function executeHookPipeline(
   adapter: ReturnType<typeof getPlatformAdapter>,
   handler: ReturnType<typeof getEventHandler>,
   platform: string,
-  options: HookCommandOptions
+  event: string,
+  options: HookCommandOptions,
+  stderrBuffer: HookStderrBuffer,
 ): Promise<number> {
   const rawInput = await readJsonFromStdin();
   const input = adapter.normalizeInput(rawInput);
   input.platform = platform;
   const result = await handler.execute(input);
 
+  // #44 USER_HINT: when the worker is degraded, fold the notice into the result
+  // on turn-boundary events. Pure — returns `result` unchanged when healthy, so
+  // the happy path is byte-identical to pre-#44.
+  const finalResult = attachDegradedNotice(event, result);
+
+  // #44: flush BEFORE the stdout emit. emitBlockingError used to flush the
+  // buffered diagnostics on its way out; exitGraceful DROPS them. Flushing here
+  // recovers the operator context on the degraded path only — healthy runs still
+  // drop (quiet-on-success / Windows Terminal tab management). Ordering matters:
+  // nothing after emitModelContext may throw, or the worker-unavailable catch
+  // branch below could double-emit (console.log EPIPE matches that predicate).
+  if (getWorkerDegraded() !== null) {
+    stderrBuffer.flush();
+  }
+
   // MODEL_CONTEXT: the only stdout JSON emit, via the platform adapter.
-  emitModelContext(adapter, result);
-  const exitCode = result.exitCode ?? HOOK_EXIT_CODES.SUCCESS;
+  emitModelContext(adapter, finalResult);
+  const exitCode = finalResult.exitCode ?? HOOK_EXIT_CODES.SUCCESS;
   exitGraceful(options);
   return exitCode;
 }
@@ -109,9 +128,10 @@ export async function hookCommand(platform: string, event: string, options: Hook
   // Hook IO Discipline (issue #2292):
   // We BUFFER stderr during handler execution so that unsolicited writes from
   // third-party libraries don't leak into model context. The buffer is FLUSHED
-  // only when we choose to surface (logger errors at the catch-all branch,
-  // fail-loud counter from worker-utils, blocking-error path). Successful exits
-  // drop the buffer — preserving the original "quiet on success" behavior.
+  // only when we choose to surface (logger errors at the catch-all branch, the
+  // blocking-error path, and — since #44 — the two degraded-worker sites below,
+  // which flush explicitly because exitGraceful drops the buffer). Successful
+  // exits drop the buffer — preserving the original "quiet on success" behavior.
   //
   // To bypass the buffer for a specific write, use emitDiagnostic /
   // emitBlockingError from src/shared/hook-io.ts. Direct process.stderr.write
@@ -122,7 +142,7 @@ export async function hookCommand(platform: string, event: string, options: Hook
   const handler = getEventHandler(event);
 
   try {
-    return await executeHookPipeline(adapter, handler, platform, options);
+    return await executeHookPipeline(adapter, handler, platform, event, options, stderrBuffer);
   } catch (error) {
     if (error instanceof AdapterRejectedInput) {
       logger.warn('HOOK', `Adapter rejected input (${error.reason}), skipping hook`);
@@ -138,13 +158,28 @@ export async function hookCommand(platform: string, event: string, options: Hook
     }
     if (isWorkerUnavailableError(error)) {
       logger.warn('HOOK', `Worker unavailable, skipping hook: ${error instanceof Error ? error.message : error}`);
-      // EXIT_SIGNAL per CLAUDE.md: transient worker errors exit 0 to avoid
-      // Windows Terminal tab accumulation. The fail-loud counter (worker-utils
-      // recordWorkerUnreachable) handles the surface-after-N-failures path and
-      // emits the threshold-gated hook_failed telemetry internally. Awaited:
-      // when the count JUST reaches the threshold it sends the event and then
-      // exits 2; exitGraceful below would kill a pending POST mid-flight.
+      // EXIT_SIGNAL per CLAUDE.md: worker errors exit 0 — always. Pre-#44 these
+      // two lines were DEAD past the fail-loud threshold, because
+      // recordWorkerUnreachable() escalated to a blocking exit 2. It now
+      // returns normally, so this branch finally does what its comment claims.
+      // Still awaited: it may send the one-shot hook_failed telemetry, and
+      // exitGraceful below would kill a pending POST mid-flight.
       await recordWorkerUnreachable();
+      // #44: this branch previously emitted NO stdout JSON at all, so a degraded
+      // worker that made the handler THROW was completely invisible. Emit the
+      // no-op envelope carrying the notice.
+      if (getWorkerDegraded() !== null) {
+        stderrBuffer.flush();
+      }
+      try {
+        emitModelContext(adapter, attachDegradedNotice(event, buildNoOpResult(event)));
+      } catch {
+        // [ANTI-PATTERN IGNORED]: emitModelContext's double-emit guard is the
+        // only thing that throws here, and it throwing means the stdout JSON
+        // envelope was ALREADY written — there is nothing to recover and nothing
+        // to log. Re-throwing would fall through to the generic branch below and
+        // reintroduce the exit(2) this row exists to remove.
+      }
       exitGraceful(options);
       return HOOK_EXIT_CODES.SUCCESS;
     }

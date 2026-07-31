@@ -5,7 +5,7 @@ import { spawn } from 'child_process';
 import type { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { getWorkerPort, getWorkerHost, fetchWithTimeout, resolveWorkerScriptPath } from '../shared/worker-utils.js';
+import { getWorkerPort, getWorkerHost, fetchWithTimeout, resolveWorkerScriptPath, resetWorkerFailureCounter } from '../shared/worker-utils.js';
 import { getCurrentWorkerPid, verifyRestartedWorker } from './restart-verify.js';
 import { runShutdownSequence, type WorkerShutdownReason } from './worker-shutdown.js';
 import { DATA_DIR, DB_PATH, ensureDir } from '../shared/paths.js';
@@ -1067,6 +1067,11 @@ async function main() {
       if (result === 'dead') {
         exitWithStatus('error', await describeStartFailure(port));
       } else {
+        // #44: an operator who just fixed the worker must not inherit the streak
+        // that accumulated while it was down. Pre-#44 the ONLY reset was a
+        // completed hook HTTP round-trip, so `worker start` left the counter
+        // armed and the next hook could surface a stale notice.
+        resetWorkerFailureCounter();
         exitWithStatus('ready', result === 'warming' ? 'Worker started; still warming up' : undefined);
       }
       break;
@@ -1112,6 +1117,9 @@ async function main() {
         if (handoff.ok) {
           console.log(`Worker restart verified (pid: ${handoff.pid}, version: ${handoff.version})`);
           logger.info('SYSTEM', 'Worker restart verified', { pid: handoff.pid, version: handoff.version });
+          // #44: same reset as `worker start` — a verified successor means the
+          // outage is over.
+          resetWorkerFailureCounter();
           process.exit(0);
         }
         handoffDetail = `; handoff attempt: ${handoff.lastObserved}`;
@@ -1190,6 +1198,10 @@ async function main() {
       }
       console.log(`Worker restart verified (pid: ${verification.pid}, version: ${verification.version})`);
       logger.info('SYSTEM', 'Worker restart verified', { pid: verification.pid, version: verification.version });
+      // #44: the CLI-spawn fallback's success exit gets the same reset as the
+      // verified-handoff path above. Failure paths (exit 1) deliberately keep
+      // their streak.
+      resetWorkerFailureCounter();
       process.exit(0);
       break;
     }

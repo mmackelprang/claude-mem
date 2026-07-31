@@ -7,7 +7,8 @@ import { SettingsDefaultsManager, type SettingsDefaults } from "./SettingsDefaul
 import { MARKETPLACE_ROOT, DATA_DIR } from "./paths.js";
 import { loadFromFileOnce } from "./hook-settings.js";
 import { validateWorkerPidFile } from "../supervisor/index.js";
-import { emitBlockingError } from "./hook-io.js";
+import { emitDiagnostic } from "./hook-io.js";
+import { markWorkerDegraded, clearWorkerDegraded } from "./hook-degraded-notice.js";
 import { captureCliEvent } from "../services/telemetry/cli-telemetry.js";
 import { checkVersionMatch } from "../services/infrastructure/index.js";
 // Imported from ProcessManager.js directly (not the infrastructure barrel):
@@ -532,15 +533,46 @@ let aliveCache: boolean | null = null;
 export async function ensureWorkerAliveOnce(): Promise<boolean> {
   if (aliveCache !== null) return aliveCache;
   aliveCache = await ensureWorkerRunning();
+  // #44 reset path: a reachable worker clears the streak as soon as it answers,
+  // BEFORE the request that follows. The two pre-existing resets fire only after
+  // a response arrives (executeWithWorkerFallback), so a call that threw or timed
+  // out mid-flight used to leave a stale streak armed even though the worker was
+  // demonstrably up. NOTE: executeWithWorkerFallback is this function's only
+  // caller, so hook paths that never issue worker HTTP at all (the Codex MCP
+  // context path, context.ts:80-85) are still NOT covered here — that gap is
+  // tracked as its own queue row.
+  if (aliveCache) resetWorkerFailureCounter();
   return aliveCache;
 }
 
 interface HookFailureState {
   consecutiveFailures: number;
   lastFailureAt: number;
+  /**
+   * #44 — wall-clock ms when the CURRENT streak began. 0 = unknown (a state
+   * file written before #44). Powers the "over 2h 13m" half of the notice.
+   */
+  streakStartedAt: number;
+  /**
+   * #44 — wall-clock ms of the last raw-stderr degraded diagnostic. Persisted,
+   * not in-process: every hook is a fresh short-lived process, so an in-memory
+   * cooldown would be a no-op. 0 = never emitted.
+   */
+  lastNoticeAt: number;
 }
 
 const FAIL_LOUD_DEFAULT_THRESHOLD = 3;
+/**
+ * #44 — a streak only survives if its failures are consecutive IN TIME. Without
+ * decay, `lastFailureAt` is written and read by nothing, and a 298-long streak
+ * from last week arrives pre-armed at the first transient failure of the next
+ * session. That is how 3 real failures became 298.
+ */
+const FAIL_DECAY_DEFAULT_MINUTES = 30;
+/** #44 — minimum gap between raw-stderr diagnostics. The per-turn banner is NOT rate-limited. */
+const NOTICE_COOLDOWN_DEFAULT_MINUTES = 10;
+/** #44 — `CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD=0` means "never surface a notice". */
+const NOTICES_DISABLED = 0;
 
 function getStateDir(): string {
   return path.join(DATA_DIR, 'state');
@@ -550,17 +582,29 @@ function getHookFailuresPath(): string {
   return path.join(getStateDir(), 'hook-failures.json');
 }
 
+function parseNonNegativeNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 function parseHookFailureState(raw: string): HookFailureState {
   const parsed = JSON.parse(raw) as Partial<HookFailureState>;
+  // #44: the two new fields default to 0 on a pre-#44 state file, which every
+  // consumer below treats as "unknown" — so the shape change is backward
+  // compatible and needs no migration.
   return {
-    consecutiveFailures: typeof parsed.consecutiveFailures === 'number' && Number.isFinite(parsed.consecutiveFailures)
-      ? Math.max(0, Math.floor(parsed.consecutiveFailures))
-      : 0,
-    lastFailureAt: typeof parsed.lastFailureAt === 'number' && Number.isFinite(parsed.lastFailureAt)
-      ? parsed.lastFailureAt
-      : 0,
+    consecutiveFailures: parseNonNegativeNumber(parsed.consecutiveFailures),
+    lastFailureAt: parseNonNegativeNumber(parsed.lastFailureAt),
+    streakStartedAt: parseNonNegativeNumber(parsed.streakStartedAt),
+    lastNoticeAt: parseNonNegativeNumber(parsed.lastNoticeAt),
   };
 }
+
+const EMPTY_FAILURE_STATE: HookFailureState = {
+  consecutiveFailures: 0,
+  lastFailureAt: 0,
+  streakStartedAt: 0,
+  lastNoticeAt: 0,
+};
 
 function readHookFailureState(): HookFailureState {
   try {
@@ -570,7 +614,7 @@ function readHookFailureState(): HookFailureState {
     // absent (ENOENT) on every hook run until the first worker failure, so
     // logging here would fire on effectively every healthy invocation; the
     // recovery is the zeroed default state below.
-    return { consecutiveFailures: 0, lastFailureAt: 0 };
+    return { ...EMPTY_FAILURE_STATE };
   }
 }
 
@@ -591,16 +635,44 @@ function writeHookFailureStateAtomic(state: HookFailureState): void {
   }
 }
 
+function readMinutesSetting(
+  key: 'CLAUDE_MEM_HOOK_FAIL_DECAY_MINUTES' | 'CLAUDE_MEM_HOOK_NOTICE_COOLDOWN_MINUTES',
+  fallbackMinutes: number,
+): number {
+  try {
+    const parsed = parseInt(loadFromFileOnce()[key], 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  } catch {
+    // settings unreadable — fall through to default
+  }
+  return fallbackMinutes;
+}
+
+/**
+ * #44 — `0` is now an explicit OFF switch ("never surface a notice"), not a
+ * silent fallback to the default. Pre-#44 the guard required a value of at
+ * least one, so a user hitting the blocking bug could not turn it off: `0`
+ * quietly meant `3`. Negative / non-numeric values still fall back to the
+ * default.
+ */
 function getFailLoudThreshold(): number {
   try {
     const settings = loadFromFileOnce();
     const raw = settings.CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD;
     const parsed = parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed >= 1) return parsed;
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
   } catch {
     // settings unreadable — fall through to default
   }
   return FAIL_LOUD_DEFAULT_THRESHOLD;
+}
+
+function getFailDecayMs(): number {
+  return readMinutesSetting('CLAUDE_MEM_HOOK_FAIL_DECAY_MINUTES', FAIL_DECAY_DEFAULT_MINUTES) * 60_000;
+}
+
+function getNoticeCooldownMs(): number {
+  return readMinutesSetting('CLAUDE_MEM_HOOK_NOTICE_COOLDOWN_MINUTES', NOTICE_COOLDOWN_DEFAULT_MINUTES) * 60_000;
 }
 
 /**
@@ -657,61 +729,113 @@ export function buildCrashLoopDiagnosis(
   return `claude-mem worker has failed to start ${consecutiveFailures}× in a row. ${logHint}.`;
 }
 
+/**
+ * #44 — NEVER exits. Records the failure, applies decay, and past the threshold
+ * marks the process degraded + writes the loud-but-non-blocking channels.
+ * Returns the post-decay streak length.
+ *
+ * Pre-#44 this routed the message through the blocking-error emitter, whose
+ * unconditional exit 2 Claude Code reads as "operation blocked" — so a down
+ * worker made the user unable to submit prompts, and every blocked prompt was
+ * itself a hook that incremented the counter (3 real failures + 295
+ * self-inflicted = 298). The ratchet is dead because nothing blocks; the streak
+ * is bounded in TIME by decay.
+ */
 export async function recordWorkerUnreachable(): Promise<number> {
-  const state = readHookFailureState();
+  const now = Date.now();
+  const previous = readHookFailureState();
+
+  // DECAY: `lastFailureAt` has been written since day one and read by NOTHING.
+  // This is its first consumer. A streak older than the window is expired and a
+  // fresh one starts at 1.
+  const expired = previous.consecutiveFailures > 0
+    && previous.lastFailureAt > 0
+    && (now - previous.lastFailureAt) > getFailDecayMs();
+  const priorFailures = expired ? 0 : previous.consecutiveFailures;
+
   const next: HookFailureState = {
-    consecutiveFailures: state.consecutiveFailures + 1,
-    lastFailureAt: Date.now(),
+    consecutiveFailures: priorFailures + 1,
+    lastFailureAt: now,
+    streakStartedAt: priorFailures === 0
+      ? now
+      : (previous.streakStartedAt || previous.lastFailureAt || now),
+    lastNoticeAt: expired ? 0 : previous.lastNoticeAt,
   };
+  // Persist the increment BEFORE anything that awaits, so a killed hook process
+  // cannot lose it (preserves the pre-#44 ordering).
   writeHookFailureStateAtomic(next);
 
   const threshold = getFailLoudThreshold();
-  if (next.consecutiveFailures >= threshold) {
-    // hook_failed distress signal. Gated to the failure that JUST reached the
-    // threshold (`===`, not `>=`): the stderr warning below repeats on every
-    // failure past the threshold, but telemetry emits once per failure streak
-    // to bound volume. MUST be awaited BEFORE emitBlockingError — it calls
-    // process.exit(2) immediately, which would kill a fire-and-forget POST
-    // mid-flight. captureCliEvent never throws and is hard-capped at 2s, so
-    // this cannot hang the fail-loud path. Closed-enum/count props only —
-    // never error text. Transport is the direct CLI POST, never the worker
-    // API (the defining failure here IS "worker unreachable").
-    if (next.consecutiveFailures === threshold) {
-      await captureCliEvent('hook_failed', {
-        ...(activeHookType !== null ? { hook_type: activeHookType } : {}),
-        error_mode: 'worker_unavailable',
-        consecutive_failures: next.consecutiveFailures,
-        threshold_tripped: true,
-      });
-      // Crash-loop liveness (#17): emit the orphaned-socket diagnosis ONCE per
-      // streak (same `=== threshold` gate as the telemetry above). Probe the
-      // port only here, at the crossing — never on the happy path. Lazy-import
-      // the canonical bind probe (Task 3) to avoid a shared→services static
-      // import cycle; best-effort, never breaks the fail-loud path.
-      try {
-        const { isPortInUse } = await import('../services/infrastructure/HealthMonitor.js');
-        const workerPort = getWorkerPort();
-        const diagnosis = buildCrashLoopDiagnosis(next.consecutiveFailures, await isPortInUse(workerPort), workerPort, threshold);
-        if (diagnosis) logger.failure('SYSTEM', diagnosis);
-      } catch {
-        // diagnostic is best-effort — swallow so fail-loud still proceeds
-      }
+  if (threshold === NOTICES_DISABLED) return next.consecutiveFailures;
+  if (next.consecutiveFailures < threshold) return next.consecutiveFailures;
+
+  // #44: record the condition for hookCommand's attachDegradedNotice(). Done
+  // FIRST so a slow telemetry POST below cannot delay it.
+  markWorkerDegraded({
+    streak: next.consecutiveFailures,
+    sinceMs: next.streakStartedAt,
+    threshold,
+  });
+
+  // hook_failed distress signal. Gated to the failure that JUST reached the
+  // threshold (`===`, not `>=`) to bound telemetry volume — the per-turn banner
+  // is the repeating channel. Closed-enum/count props only, never error text.
+  // Transport is the direct CLI POST, never the worker API (the defining
+  // failure here IS "worker unreachable"). captureCliEvent never throws and is
+  // hard-capped at 2s.
+  if (next.consecutiveFailures === threshold) {
+    await captureCliEvent('hook_failed', {
+      ...(activeHookType !== null ? { hook_type: activeHookType } : {}),
+      error_mode: 'worker_unavailable',
+      consecutive_failures: next.consecutiveFailures,
+      threshold_tripped: true,
+    });
+    // Crash-loop liveness (#17): emit the orphaned-socket diagnosis ONCE per
+    // streak (same `=== threshold` gate). Probe the port only here, at the
+    // crossing — never on the happy path. Lazy-import the canonical bind probe
+    // to avoid a shared->services static import cycle; best-effort.
+    try {
+      const { isPortInUse } = await import('../services/infrastructure/HealthMonitor.js');
+      const workerPort = getWorkerPort();
+      const diagnosis = buildCrashLoopDiagnosis(next.consecutiveFailures, await isPortInUse(workerPort), workerPort, threshold);
+      if (diagnosis) logger.failure('SYSTEM', diagnosis);
+    } catch {
+      // diagnostic is best-effort — swallow so the notice path still proceeds
     }
-    // #2292 fix: BLOCKING_FEEDBACK. emitBlockingError flushes the Phase 2
-    // stderr buffer (so preceding logger.warn lines also surface) and writes
-    // via the bypass channel + exits 2. Previously this raw process.stderr.write
-    // was swallowed by hookCommand's blanket no-op, so the user/model never saw it.
-    emitBlockingError(
-      `claude-mem worker unreachable for ${next.consecutiveFailures} consecutive hooks.`
-    );
   }
+
+  const message = `claude-mem worker unreachable for ${next.consecutiveFailures} consecutive hooks.`;
+
+  // Channel 1 (always): durable structured line in ~/.claude-mem/logs/.
+  logger.failure('SYSTEM', message, {
+    consecutiveFailures: next.consecutiveFailures,
+    threshold,
+    streakStartedAt: next.streakStartedAt,
+  });
+
+  // Channel 2 (rate-limited, all platforms incl. cursor/windsurf whose adapters
+  // drop systemMessage): real stderr via the pinned bypass channel. NOT the
+  // blocking-error emitter — that exits 2, which is the whole bug.
+  if (next.lastNoticeAt === 0 || (now - next.lastNoticeAt) > getNoticeCooldownMs()) {
+    emitDiagnostic(`${message}\n`);
+    writeHookFailureStateAtomic({ ...next, lastNoticeAt: now });
+  }
+
+  // Channel 3 (per turn) is the in-band banner, attached by hookCommand via
+  // attachDegradedNotice() — see markWorkerDegraded() above.
   return next.consecutiveFailures;
 }
 
-function resetWorkerFailureCounter(): void {
+/**
+ * #44 — exported. Pre-#44 this was module-private with exactly two call sites,
+ * both AFTER a completed worker HTTP round-trip, so a fixed worker could leave a
+ * stale streak armed indefinitely.
+ */
+export function resetWorkerFailureCounter(): void {
+  clearWorkerDegraded();
   const state = readHookFailureState();
-  if (state.consecutiveFailures === 0) return;
-  writeHookFailureStateAtomic({ consecutiveFailures: 0, lastFailureAt: 0 });
+  if (state.consecutiveFailures === 0 && state.streakStartedAt === 0 && state.lastNoticeAt === 0) return;
+  writeHookFailureStateAtomic({ ...EMPTY_FAILURE_STATE });
 }
 
 const WORKER_FALLBACK_BRAND: unique symbol = Symbol.for('claude-mem/worker-fallback');

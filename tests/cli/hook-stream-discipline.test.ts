@@ -14,8 +14,10 @@ import type { HookResult } from '../../src/cli/types.js';
 // Windows Terminal tab-accumulation rationale (per CLAUDE.md):
 // The exit-0-on-error policy is intentional — non-zero exits keep Windows
 // Terminal tabs open. exitGraceful() exits 0 and drops buffered stderr for the
-// transient worker-unavailable path. emitBlockingError() exits 2 only for the
-// fail-loud counter (recordWorkerUnreachable) and unrecoverable handler errors.
+// transient worker-unavailable path. emitBlockingError() exits 2 for
+// unrecoverable handler errors ONLY — since #44 the fail-loud counter
+// (recordWorkerUnreachable) no longer routes through it, because a memory
+// plugin must never be able to block a prompt. See the contract test below.
 //
 // These tests assert the IO-discipline CONTRACT at the seam level rather than
 // spawning the built worker daemon, because worker-service auto-spawns a Bun
@@ -58,11 +60,24 @@ describe('#2292 — fail-loud diagnostic is no longer swallowed', () => {
     }
   });
 
-  it('worker-utils recordWorkerUnreachable routes through emitBlockingError (source contract)', () => {
+  // #44 CONTRACT CHANGE (deliberate, see docs/superpowers/specs/2026-07-31-hook-fail-open-never-block-design.md).
+  // The OLD contract required worker-utils to route the worker-unreachable
+  // message through emitBlockingError(). That call ends in an unconditional
+  // process.exit(2), which Claude Code reads as "operation blocked" — so a down
+  // worker made the user unable to submit prompts at all (298-hook streak, P1).
+  // The NEW contract is the inverse: the fail-loud counter must be LOUD and
+  // NON-BLOCKING. emitBlockingError itself is unchanged and still correct for
+  // the unrecoverable-handler-error path in hook-command.ts.
+  it('worker-utils recordWorkerUnreachable is loud but NEVER blocks (source contract)', () => {
     const src = readFileSync(join(REPO_ROOT, 'src', 'shared', 'worker-utils.ts'), 'utf-8');
-    // The fail-loud branch must NOT call process.stderr.write / process.exit directly.
-    expect(src).toContain('emitBlockingError(');
-    expect(src).not.toMatch(/process\.stderr\.write\(\s*\n\s*`claude-mem worker unreachable/);
+    // It must not be able to end the process, by any route.
+    expect(src).not.toContain('emitBlockingError(');
+    expect(src).not.toContain('process.exit(');
+    // It must still surface: the non-exiting bypass channel + the durable log
+    // line + the in-band notice hand-off.
+    expect(src).toContain('emitDiagnostic(');
+    expect(src).toContain("logger.failure('SYSTEM'");
+    expect(src).toContain('markWorkerDegraded(');
   });
 });
 

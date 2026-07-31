@@ -115,6 +115,34 @@ export async function runDoctorCommand(): Promise<void> {
     required: false, // worker can be intentionally stopped; don't hard-fail
   });
 
+  // 5b. Hook capture health (#44). Read-only: reports the worker-unreachable
+  // streak so a degraded claude-mem is visible WITHOUT a database query — the
+  // observability gap that let #41 run silently for 11 days. Never resets.
+  const failureStatePath = join(dataDir, 'state', 'hook-failures.json');
+  if (existsSync(failureStatePath)) {
+    let streak = 0;
+    let lastFailureAt = 0;
+    try {
+      const record = JSON.parse(readFileSync(failureStatePath, 'utf-8'));
+      if (record && typeof record === 'object') {
+        streak = typeof record.consecutiveFailures === 'number' ? record.consecutiveFailures : 0;
+        lastFailureAt = typeof record.lastFailureAt === 'number' ? record.lastFailureAt : 0;
+      }
+    } catch {
+      // corrupt state file — reported as a warn below via the zeroed values
+    }
+    if (streak > 0) {
+      const ageMinutes = lastFailureAt > 0 ? Math.floor((Date.now() - lastFailureAt) / 60_000) : -1;
+      const ageDetail = ageMinutes >= 0 ? `, last ${ageMinutes}m ago` : '';
+      checks.push({
+        name: 'Hook capture',
+        status: 'warn',
+        detail: `${streak} consecutive worker-unreachable hook(s)${ageDetail} — memory capture may be OFF. Fix: \`claude-mem worker start\``,
+        required: false,
+      });
+    }
+  }
+
   // 6. Last recorded install error (surface remediation if present).
   const lastErrorPath = join(dataDir, 'last-install-error.json');
   if (existsSync(lastErrorPath)) {
