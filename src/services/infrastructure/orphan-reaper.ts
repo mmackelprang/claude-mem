@@ -105,3 +105,158 @@ export async function reapOrphanedChroma(): Promise<{ killed: number[] }> {
   }
   return { killed };
 }
+
+// ---------------------------------------------------------------------------
+// POSIX sweep (#40)
+//
+// The win32 path above cannot fire on Linux/WSL (listChromaOrphanCandidates
+// returns [] at :60) and is only reachable from the dead-but-bound EADDRINUSE
+// branch (worker-service.ts:1447-1464), which a normal restart never enters.
+// This sibling runs at worker startup on POSIX and catches orphans whose
+// supervisor.json record was already overwritten, so no handle survives.
+//
+// Ownership is decided by SUBTREE + AGE, never by PPID === 1: on WSL orphans
+// reparent to a non-1 /init subreaper (this box has /init at pids 1, 9, 10,
+// 7235, 7236, 15952, and the healthy worker itself has ppid=15952), so a
+// PPID === 1 test is wrong in both directions.
+//
+// The SCOPE CAVEAT above applies unchanged: a chroma-mcp invocation cannot be
+// scoped by data-dir, because remote (`--client-type http`) installs carry none.
+// On a host running a second, independent claude-mem worker this sweep could
+// kill that worker's chroma. Accepted for single-worker installs (the same call
+// PR #21 made); set CLAUDE_MEM_CHROMA_ORPHAN_SWEEP=false to disable.
+
+export interface PosixProcRow {
+  pid: number;
+  ppid: number;
+  /** Elapsed seconds since start; 0 when `ps` could not supply it (fails OPEN). */
+  ageSeconds: number;
+  commandLine: string;
+}
+
+const MIN_ORPHAN_AGE_SECONDS = 2;
+
+/**
+ * Enumerate every process with pid/ppid/age/cmdline. Prefers `etimes` (procps);
+ * falls back to a no-age form on platforms lacking it (e.g. macOS), where age
+ * reads 0 and therefore fails OPEN, matching filterChromaOrphans' convention.
+ */
+export function listPosixProcesses(): PosixProcRow[] {
+  if (process.platform === 'win32') return [];
+
+  const attempts: Array<{ args: string[]; hasAge: boolean }> = [
+    { args: ['-eo', 'pid=,ppid=,etimes=,args='], hasAge: true },
+    { args: ['-eo', 'pid=,ppid=,args='], hasAge: false }
+  ];
+
+  for (const attempt of attempts) {
+    const result = spawnSync('ps', attempt.args, {
+      encoding: 'utf-8',
+      timeout: 5000,
+      env: { ...sanitizeEnv(process.env), LC_ALL: 'C', LANG: 'C' }
+    });
+    if (result.status !== 0 || !result.stdout) continue;
+
+    const rows: PosixProcRow[] = [];
+    for (const line of result.stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const match = attempt.hasAge
+        ? /^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(trimmed)
+        : /^(\d+)\s+(\d+)\s+(.*)$/.exec(trimmed);
+      if (!match) continue;
+      rows.push(attempt.hasAge
+        ? {
+            pid: Number.parseInt(match[1], 10),
+            ppid: Number.parseInt(match[2], 10),
+            ageSeconds: Number.parseInt(match[3], 10),
+            commandLine: match[4]
+          }
+        : {
+            pid: Number.parseInt(match[1], 10),
+            ppid: Number.parseInt(match[2], 10),
+            ageSeconds: 0,
+            commandLine: match[3]
+          });
+    }
+    if (rows.length > 0) return rows;
+  }
+
+  return [];
+}
+
+/** Every pid in `rootPid`'s subtree, including rootPid itself. */
+export function collectSubtree(rows: PosixProcRow[], rootPid: number): Set<number> {
+  const childrenByParent = new Map<number, number[]>();
+  for (const row of rows) {
+    const siblings = childrenByParent.get(row.ppid);
+    if (siblings) siblings.push(row.pid);
+    else childrenByParent.set(row.ppid, [row.pid]);
+  }
+
+  const subtree = new Set<number>([rootPid]);
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    const parent = queue.shift() as number;
+    for (const child of childrenByParent.get(parent) ?? []) {
+      if (subtree.has(child)) continue;
+      subtree.add(child);
+      queue.push(child);
+    }
+  }
+  return subtree;
+}
+
+/**
+ * Pure predicate — the unit-testable core of the sweep.
+ *
+ * A row is an orphan when it is a real chroma-mcp INVOCATION (same two-token
+ * test as filterChromaOrphans, so an incidental mention never matches), is NOT
+ * in `selfPid`'s subtree, and is at least MIN_ORPHAN_AGE_SECONDS old. Both the
+ * `uv` wrapper and its python child match the cmdline test independently, which
+ * is the point: the tree is already broken, so each member is identified by its
+ * own argv rather than by parentage.
+ */
+export function filterPosixChromaOrphans(rows: PosixProcRow[], selfPid: number): PosixProcRow[] {
+  const own = collectSubtree(rows, selfPid);
+  return rows.filter((row) => {
+    if (!Number.isInteger(row.pid) || row.pid <= 1) return false;
+    if (own.has(row.pid)) return false;
+    if (!CHROMA_NAME.test(row.commandLine)) return false;
+    if (!CHROMA_INVOCATION.test(row.commandLine)) return false;
+    if (row.ageSeconds > 0 && row.ageSeconds < MIN_ORPHAN_AGE_SECONDS) return false;
+    return true;
+  });
+}
+
+/** Kill-switch. Default ON — otherwise the already-accumulated backlog is never cleaned. */
+function sweepEnabled(): boolean {
+  return process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP !== 'false';
+}
+
+export async function sweepPosixChromaOrphans(
+  selfPid: number = process.pid
+): Promise<{ killed: number[] }> {
+  if (process.platform === 'win32' || !sweepEnabled()) return { killed: [] };
+
+  const candidates = filterPosixChromaOrphans(listPosixProcesses(), selfPid);
+  const killed: number[] = [];
+
+  for (const candidate of candidates) {
+    try {
+      process.kill(candidate.pid, 'SIGKILL');
+      killed.push(candidate.pid);
+      logger.warn('SYSTEM', 'Swept an untracked orphaned chroma-mcp process', {
+        pid: candidate.pid,
+        ageSeconds: candidate.ageSeconds
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ESRCH') {
+        logger.debug('SYSTEM', 'Failed to sweep an orphaned chroma-mcp process', { pid: candidate.pid, code });
+      }
+    }
+  }
+
+  return { killed };
+}
