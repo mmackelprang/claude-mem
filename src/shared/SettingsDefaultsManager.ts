@@ -66,6 +66,11 @@ export interface SettingsDefaults {
   CLAUDE_MEM_CHROMA_TENANT: string;
   CLAUDE_MEM_CHROMA_DATABASE: string;
   CLAUDE_MEM_CHROMA_PREWARM_TIMEOUT_MS: string;
+  // #40 kill-switch for the POSIX chroma-mcp orphan sweep run at worker start
+  // (orphan-reaper.ts). Set to 'false' to disable. Lives here as well as in the
+  // env because the worker is a detached daemon — there is no shell in which a
+  // user could export the variable.
+  CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: string;
   // Worker-native cloud sync (cmem.ai Pro). Active ⇔ TOKEN and USER_ID are
   // both non-empty — there is no separate enabled flag.
   CLAUDE_MEM_CLOUD_SYNC_TOKEN: string;
@@ -168,6 +173,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_CHROMA_TENANT: 'default_tenant',
     CLAUDE_MEM_CHROMA_DATABASE: 'default_database',
     CLAUDE_MEM_CHROMA_PREWARM_TIMEOUT_MS: '120000',
+    CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'true',
     // Worker-native cloud sync (cmem.ai Pro): credentials come from cmem.ai → Connect.
     CLAUDE_MEM_CLOUD_SYNC_TOKEN: '',
     CLAUDE_MEM_CLOUD_SYNC_USER_ID: '',

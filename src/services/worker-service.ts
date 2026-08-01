@@ -54,8 +54,14 @@ import {
   waitForPortFree,
   httpShutdown
 } from './infrastructure/HealthMonitor.js';
-import { reapOrphanedChroma } from './infrastructure/orphan-reaper.js';
-import { performGracefulShutdown } from './infrastructure/GracefulShutdown.js';
+import { reapOrphanedChroma, sweepPosixChromaOrphans } from './infrastructure/orphan-reaper.js';
+// #40 — performGracefulShutdown (GracefulShutdown.ts) is deliberately NOT
+// imported any more: its unguarded six-step await chain forfeits chroma
+// teardown whenever an earlier step throws. performResilientShutdown runs the
+// same steps in the same order with each one fault-isolated. The upstream file
+// itself stays byte-identical to f5633c1f (ADR 0002 §9).
+import { reconcileStaleChromaRecord, ensureChromaTornDown } from './infrastructure/chroma-reconcile.js';
+import { performResilientShutdown } from './infrastructure/resilient-shutdown.js';
 import { adoptMergedWorktrees, adoptMergedWorktreesForAllKnownRepos } from './infrastructure/WorktreeAdoption.js';
 
 import { Server } from './server/Server.js';
@@ -197,6 +203,23 @@ function readAndClearCleanShutdownSentinel(): string | null {
   return contents;
 }
 
+/**
+ * #40 — the `chroma-mcp` pid currently recorded in supervisor.json, or null.
+ * Read BEFORE the shutdown sequence, because step 6 unregisters the record
+ * (src/supervisor/shutdown.ts:78-80). Never throws.
+ */
+function readTrackedChromaPid(): number | null {
+  try {
+    const record = getSupervisor().getRegistry().getAll().find((entry) => entry.id === 'chroma-mcp');
+    return record && Number.isInteger(record.pid) ? record.pid : null;
+  } catch (error) {
+    logger.debug('SYSTEM', 'Could not snapshot the chroma-mcp pid before shutdown', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
 export class WorkerService implements WorkerRef {
   private server: Server;
   private startTime: number = Date.now();
@@ -226,6 +249,8 @@ export class WorkerService implements WorkerRef {
   private missionControlMineTimer: ReturnType<typeof setInterval> | null = null;
 
   private chromaMcpManager: ChromaMcpManager | null = null;
+  /** #40 — set by the teardown so the post-sequence guarantee can skip a redundant kill. */
+  private chromaTornDown = false;
   private transcriptWatcher: TranscriptWatcher | null = null;
   private initializationComplete: Promise<void>;
   private resolveInitialization!: () => void;
@@ -431,6 +456,37 @@ export class WorkerService implements WorkerRef {
     this.detectPreviousShutdown();
 
     await startSupervisor();
+
+    // #40 — reclaim chroma-mcp trees leaked by a previous worker, BEFORE this
+    // worker's own chroma can overwrite the single `chroma-mcp` registry slot
+    // (process-registry.ts:236) and destroy the last handle to them.
+    //
+    // Layer 1 (exact): the persisted record. A just-booted worker owns no
+    // chroma, so a live record here is stale by definition.
+    try {
+      const reapedPid = await reconcileStaleChromaRecord(process.pid);
+      if (reapedPid !== null) {
+        logger.info('SYSTEM', 'Reclaimed a leaked chroma-mcp tree at startup', { pid: reapedPid });
+      }
+    } catch (error) {
+      logger.warn('SYSTEM', 'chroma-mcp startup reconciliation failed (non-fatal)', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    // Layer 2 (best-effort): orphans whose registry record was already
+    // overwritten by an earlier restart, so no handle survives. See the SCOPE
+    // CAVEAT in orphan-reaper.ts — disable with CLAUDE_MEM_CHROMA_ORPHAN_SWEEP=false.
+    try {
+      const swept = await sweepPosixChromaOrphans(process.pid);
+      if (swept.killed.length > 0) {
+        logger.info('SYSTEM', 'Swept untracked chroma-mcp orphans at startup', { killed: swept.killed });
+      }
+    } catch (error) {
+      logger.warn('SYSTEM', 'chroma-mcp orphan sweep failed (non-fatal)', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
 
     await this.server.listen(port, host);
 
@@ -754,6 +810,24 @@ export class WorkerService implements WorkerRef {
     // without importing this module's bootstrap. When reason === 'restart'
     // this runs inside flushResponseThen's flushed action, so the successor
     // spawn completes before that helper's process.exit(0).
+    //
+    // #40 — read the re-entrancy flag BEFORE the sequence claims it.
+    // runShutdownSequence returns immediately when another shutdown already
+    // owns the sequence (worker-shutdown.ts:65-70), and only the OWNING call
+    // may run the post-sequence chroma guarantee below: a re-entrant caller
+    // (e.g. SIGTERM arriving during an in-flight /api/admin/restart) must not
+    // tree-kill chroma out from under the owner's still-draining session
+    // finalization, which may be writing through it.
+    const ownsShutdownSequence = !this.isShuttingDown;
+
+    // #40 — snapshot the chroma pid BEFORE the sequence runs. Teardown step 6
+    // (getSupervisor().stop() -> runShutdownCascade) unregisters every record
+    // whose pid differs from ours (src/supervisor/shutdown.ts:78-80), chroma
+    // included — and fault isolation now makes step 6 run even when step 4
+    // threw. Without this snapshot the post-sequence lookup below would come
+    // back empty in exactly the case the guarantee exists for.
+    const chromaPidSnapshot = ownsShutdownSequence ? readTrackedChromaPid() : null;
+
     await runShutdownSequence({
       reason,
       isShuttingDown: () => this.isShuttingDown,
@@ -777,13 +851,16 @@ export class WorkerService implements WorkerRef {
         });
         await shutdownTelemetry();
       },
-      performGracefulShutdown: () => performGracefulShutdown({
-        server: this.server.getHttpServer(),
-        sessionManager: this.sessionManager,
-        mcpClient: this.mcpClient,
-        dbManager: this.dbManager,
-        chromaMcpManager: this.chromaMcpManager || undefined
-      }),
+      performGracefulShutdown: async () => {
+        const result = await performResilientShutdown({
+          server: this.server.getHttpServer(),
+          sessionManager: this.sessionManager,
+          mcpClient: this.mcpClient,
+          dbManager: this.dbManager,
+          chromaMcpManager: this.chromaMcpManager || undefined
+        });
+        this.chromaTornDown = result.chromaStopped;
+      },
       gracefulDeadlineMs: getPlatformTimeout(10000),
       restartHandoff: {
         port: getWorkerPort(),
@@ -801,6 +878,34 @@ export class WorkerService implements WorkerRef {
         spawnDaemon,
       },
     });
+
+    // #40 — the guarantee that closes D1b. runShutdownSequence races
+    // performGracefulShutdown against a 10s deadline (gracefulDeadlineMs above)
+    // and ABANDONS the in-flight promise on expiry, then returns; its caller
+    // flushResponseThen then runs `finally { process.exit(0) }`
+    // (flushResponseThen.ts:12), which executes no further microtasks and no
+    // `finally` blocks in the abandoned chain. Code here still runs before that
+    // exit, so this is the last point at which the leak can be prevented.
+    //
+    // The resilient teardown makes a THROWN step survivable; only this makes an
+    // ABANDONED one survivable. Both are needed.
+    //
+    // The body lives in chroma-reconcile.ts (ensureChromaTornDown) so it is
+    // unit-testable: this module is not importable under `bun test`
+    // (worker-shutdown.ts:7-13).
+    if (ownsShutdownSequence) {
+      try {
+        await ensureChromaTornDown({
+          alreadyTornDown: this.chromaTornDown,
+          snapshotPid: chromaPidSnapshot,
+          reason
+        });
+      } catch (error) {
+        logger.warn('SYSTEM', 'Post-sequence chroma guarantee failed (best-effort)', {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
   }
 
   broadcastProcessingStatus(): void {
