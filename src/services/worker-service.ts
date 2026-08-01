@@ -60,9 +60,8 @@ import { reapOrphanedChroma, sweepPosixChromaOrphans } from './infrastructure/or
 // teardown whenever an earlier step throws. performResilientShutdown runs the
 // same steps in the same order with each one fault-isolated. The upstream file
 // itself stays byte-identical to f5633c1f (ADR 0002 §9).
-import { reconcileStaleChromaRecord } from './infrastructure/chroma-reconcile.js';
+import { reconcileStaleChromaRecord, ensureChromaTornDown } from './infrastructure/chroma-reconcile.js';
 import { performResilientShutdown } from './infrastructure/resilient-shutdown.js';
-import { killProcessTree } from './infrastructure/process-tree.js';
 import { adoptMergedWorktrees, adoptMergedWorktreesForAllKnownRepos } from './infrastructure/WorktreeAdoption.js';
 
 import { Server } from './server/Server.js';
@@ -202,6 +201,23 @@ function readAndClearCleanShutdownSentinel(): string | null {
     }
   }
   return contents;
+}
+
+/**
+ * #40 — the `chroma-mcp` pid currently recorded in supervisor.json, or null.
+ * Read BEFORE the shutdown sequence, because step 6 unregisters the record
+ * (src/supervisor/shutdown.ts:78-80). Never throws.
+ */
+function readTrackedChromaPid(): number | null {
+  try {
+    const record = getSupervisor().getRegistry().getAll().find((entry) => entry.id === 'chroma-mcp');
+    return record && Number.isInteger(record.pid) ? record.pid : null;
+  } catch (error) {
+    logger.debug('SYSTEM', 'Could not snapshot the chroma-mcp pid before shutdown', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
 }
 
 export class WorkerService implements WorkerRef {
@@ -804,6 +820,14 @@ export class WorkerService implements WorkerRef {
     // finalization, which may be writing through it.
     const ownsShutdownSequence = !this.isShuttingDown;
 
+    // #40 — snapshot the chroma pid BEFORE the sequence runs. Teardown step 6
+    // (getSupervisor().stop() -> runShutdownCascade) unregisters every record
+    // whose pid differs from ours (src/supervisor/shutdown.ts:78-80), chroma
+    // included — and fault isolation now makes step 6 run even when step 4
+    // threw. Without this snapshot the post-sequence lookup below would come
+    // back empty in exactly the case the guarantee exists for.
+    const chromaPidSnapshot = ownsShutdownSequence ? readTrackedChromaPid() : null;
+
     await runShutdownSequence({
       reason,
       isShuttingDown: () => this.isShuttingDown,
@@ -865,22 +889,21 @@ export class WorkerService implements WorkerRef {
     //
     // The resilient teardown makes a THROWN step survivable; only this makes an
     // ABANDONED one survivable. Both are needed.
-    if (ownsShutdownSequence && !this.chromaTornDown) {
-      const tracked = getSupervisor().getRegistry().getAll().find((entry) => entry.id === 'chroma-mcp');
-      if (tracked && Number.isInteger(tracked.pid) && tracked.pid > 1) {
-        logger.warn('SYSTEM', 'Graceful teardown did not reach chroma — tree-killing before exit', {
-          pid: tracked.pid,
+    //
+    // The body lives in chroma-reconcile.ts (ensureChromaTornDown) so it is
+    // unit-testable: this module is not importable under `bun test`
+    // (worker-shutdown.ts:7-13).
+    if (ownsShutdownSequence) {
+      try {
+        await ensureChromaTornDown({
+          alreadyTornDown: this.chromaTornDown,
+          snapshotPid: chromaPidSnapshot,
           reason
         });
-        try {
-          await killProcessTree(tracked.pid);
-          getSupervisor().unregisterProcess('chroma-mcp');
-        } catch (error) {
-          logger.warn('SYSTEM', 'Post-sequence chroma tree-kill failed (best-effort)', {
-            pid: tracked.pid,
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
+      } catch (error) {
+        logger.warn('SYSTEM', 'Post-sequence chroma guarantee failed (best-effort)', {
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
     }
   }
