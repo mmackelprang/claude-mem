@@ -476,7 +476,9 @@ export class WorkerService implements WorkerRef {
 
     // Layer 2 (best-effort): orphans whose registry record was already
     // overwritten by an earlier restart, so no handle survives. See the SCOPE
-    // CAVEAT in orphan-reaper.ts — disable with CLAUDE_MEM_CHROMA_ORPHAN_SWEEP=false.
+    // CAVEAT in orphan-reaper.ts — this sweep is OPT-IN and DEFAULT OFF; it
+    // no-ops unless CLAUDE_MEM_CHROMA_ORPHAN_SWEEP is explicitly 'true' (the
+    // settings.json key, or the env var for a foreground invocation).
     try {
       const swept = await sweepPosixChromaOrphans(process.pid);
       if (swept.killed.length > 0) {

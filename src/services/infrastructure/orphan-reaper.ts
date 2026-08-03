@@ -126,9 +126,17 @@ export async function reapOrphanedChroma(): Promise<{ killed: number[] }> {
 // The SCOPE CAVEAT above applies unchanged: a chroma-mcp invocation cannot be
 // scoped by data-dir, because remote (`--client-type http`) installs carry none.
 // On a host running a second, independent claude-mem worker this sweep could
-// kill that worker's chroma. Accepted for single-worker installs (the same call
-// PR #21 made); set CLAUDE_MEM_CHROMA_ORPHAN_SWEEP=false (or the same key in
-// ~/.claude-mem/settings.json) to disable.
+// kill that worker's chroma.
+//
+// DEFAULT OFF (OPT-IN). This sweep shipped default-ON in PR #43 and no longer
+// is: the blast radius above is machine-wide and decided by a command-line
+// match alone, so it now runs only when explicitly enabled by setting
+// `"CLAUDE_MEM_CHROMA_ORPHAN_SWEEP": "true"` in ~/.claude-mem/settings.json
+// (or the same name in the environment for a foreground invocation). See
+// sweepEnabled() for the precedence and the carry-over caveat. Layers 1 and 2
+// are exact and record-scoped and keep the #40 leak fixed with this off; what
+// is given up by leaving it off is only the cleanup of a backlog of orphans
+// that accumulated BEFORE those layers existed.
 //
 // SCOPE CAVEAT, WIDENED (#40 review): the WORKER is not the only claude-mem
 // runtime that spawns chroma-mcp. The SERVER runtime spawns it too — see
@@ -294,37 +302,71 @@ export function filterPosixChromaOrphans(rows: PosixProcRow[], selfPid: number):
 }
 
 /**
- * Kill-switch. Default ON — otherwise the already-accumulated backlog is never
- * cleaned.
+ * OPT-IN switch. Default OFF.
  *
- * Two sources, because an env var alone is not a usable safety valve for a
- * default-ON process-killing feature: the worker is a DETACHED DAEMON spawned
- * by a hook, so there is no shell in which a user could export anything.
- * Precedence: an explicit env var wins (it is the deliberate, per-invocation
- * override), otherwise ~/.claude-mem/settings.json, otherwise ON.
+ * The sweep SIGKILLs machine-wide on a command-line match alone (see the two
+ * SCOPE CAVEATs above), so it does not run unless it is explicitly turned on.
+ * Layers 1 and 2 — `resilient-shutdown.ts` (fault-isolated teardown) and
+ * `chroma-reconcile.ts` (startup reconcile of the stale `supervisor.json`
+ * record) — are exact and record-scoped, and they are what keeps the #40 leak
+ * fixed with this sweep off. This switch only governs the extra, unscoped
+ * backlog cleanup.
  *
- * Fails to the DEFAULT (on) on any settings error and never throws — a
- * corrupt/unreadable settings file must not crash worker startup, and must not
- * silently disable a fix the user never opted out of.
+ * ONE affirmative token: the trimmed, case-folded value must equal `'true'`.
+ * That matches every other boolean setting in the codebase (`=== 'true'`), and
+ * every other value — absent, empty, `'1'`, `'yes'`, garbage — reads as OFF,
+ * which is the safe direction for a process-killing feature.
+ *
+ * Two sources, because an env var alone is not a usable control for this: the
+ * worker is a DETACHED DAEMON spawned by a hook, so there is no shell in which
+ * a user could export anything, and the successor worker inherits the OLD
+ * worker's environment (measured during #40's close-out). The settings key is
+ * therefore the real switch; the env var only helps a foreground invocation.
+ * Precedence: an explicitly set, non-blank env var wins, otherwise the
+ * `CLAUDE_MEM_CHROMA_ORPHAN_SWEEP` key in ~/.claude-mem/settings.json,
+ * otherwise OFF.
+ *
+ * Fails to the DEFAULT (off) on any settings error and never throws — a
+ * corrupt or unreadable settings file must not crash worker startup, and must
+ * never be the reason a machine-wide SIGKILL sweep starts running.
+ *
+ * CARRY-OVER CAVEAT: `SettingsDefaultsManager.loadFromFile()` merges the file
+ * over DEFAULTS, and both it and `SettingsRoutes` persist the fully merged
+ * object. A machine that created or saved its settings.json while the default
+ * was `'true'` (i.e. between PR #43 and this change) has the literal string
+ * `"true"` written into the file, and at read time that is indistinguishable
+ * from a deliberate opt-in — so the sweep stays ON there until the key is set
+ * to `"false"` or removed. Flagged for the maintainer rather than silently
+ * migrated: rewriting a user's settings file is not this module's call.
  */
 async function sweepEnabled(): Promise<boolean> {
   const fromEnv = process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
   if (fromEnv !== undefined && fromEnv.trim() !== '') {
-    return fromEnv.trim().toLowerCase() !== 'false';
+    return fromEnv.trim().toLowerCase() === 'true';
   }
 
   try {
-    // Dynamic, mirroring worker-service.ts:505-508 — keeps the settings/paths
-    // graph off this module's static import chain.
+    // Dynamic, mirroring the settings/paths import pair in worker-service.ts's
+    // initializeBackground() — keeps that graph off this module's static import
+    // chain. (Described rather than cited by line: the previous `:505-508`
+    // pointer had already drifted onto unrelated code on `main`.)
     const { SettingsDefaultsManager } = await import('../../shared/SettingsDefaultsManager.js');
     const { USER_SETTINGS_PATH } = await import('../../shared/paths.js');
-    const value = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
-    return String(value ?? '').trim().toLowerCase() !== 'false';
+    // `applyEnvOverrides: false` IS LOAD-BEARING. loadFromFile otherwise layers
+    // process.env back over the file for every key it knows, and it tests
+    // `!== undefined` — so a set-but-BLANK CLAUDE_MEM_CHROMA_ORPHAN_SWEEP would
+    // clobber the file's value with '' and silently veto an explicit settings
+    // opt-in. We have already decided above that a blank env var is not an
+    // answer; this is the branch where the FILE gets to answer.
+    const value = SettingsDefaultsManager
+      .loadFromFile(USER_SETTINGS_PATH, false)
+      .CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
+    return String(value ?? '').trim().toLowerCase() === 'true';
   } catch (error) {
-    logger.debug('SYSTEM', 'Could not read the chroma orphan-sweep setting — defaulting to enabled', {
+    logger.debug('SYSTEM', 'Could not read the chroma orphan-sweep setting — leaving the sweep disabled', {
       error: error instanceof Error ? error.message : String(error)
     });
-    return true;
+    return false;
   }
 }
 

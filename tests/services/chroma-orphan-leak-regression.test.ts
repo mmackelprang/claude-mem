@@ -8,6 +8,7 @@ import {
   filterPosixChromaOrphans,
   collectSubtree,
   listPosixProcesses,
+  sweepPosixChromaOrphans,
   sweepPosixChromaOrphansFrom,
   type PosixProcRow
 } from '../../src/services/infrastructure/orphan-reaper.js';
@@ -19,6 +20,7 @@ import {
 import { killProcessTree, isChromaMcpProcess } from '../../src/services/infrastructure/process-tree.js';
 import { createProcessRegistry } from '../../src/supervisor/process-registry.js';
 import { USER_SETTINGS_PATH } from '../../src/shared/paths.js';
+import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManager.js';
 
 // --- process.kill swap (template: tests/supervisor/shutdown.test.ts:84-101) ---
 const realKill = process.kill.bind(process);
@@ -442,7 +444,27 @@ describe('#40 chroma-mcp orphan leak — the sweep kill path', () => {
     else process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = previousEnv;
   });
 
-  it.skipIf(process.platform === 'win32')('SIGKILLs exactly the orphaned pids', async () => {
+  /**
+   * Run `fn` against a chosen ~/.claude-mem/settings.json body, restoring
+   * whatever was there before. `body === null` means "no settings file at all",
+   * which also exercises loadFromFile's create-with-defaults path — hence the
+   * unconditional cleanup in `finally`. paths.ts freezes USER_SETTINGS_PATH
+   * under the test data dir (tests/preload.ts), so this never touches a real
+   * user's file.
+   */
+  async function withSettingsFile(body: string | null, fn: () => Promise<void>): Promise<void> {
+    const backup = existsSync(USER_SETTINGS_PATH) ? readFileSync(USER_SETTINGS_PATH, 'utf-8') : null;
+    try {
+      if (body === null) rmSync(USER_SETTINGS_PATH, { force: true });
+      else writeFileSync(USER_SETTINGS_PATH, body);
+      await fn();
+    } finally {
+      if (backup !== null) writeFileSync(USER_SETTINGS_PATH, backup);
+      else rmSync(USER_SETTINGS_PATH, { force: true });
+    }
+  }
+
+  it.skipIf(process.platform === 'win32')('SIGKILLs exactly the orphaned pids once explicitly opted in', async () => {
     process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = 'true';
 
     const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
@@ -454,7 +476,7 @@ describe('#40 chroma-mcp orphan leak — the sweep kill path', () => {
     ]);
   });
 
-  it('is a no-op when the env kill-switch is set to false', async () => {
+  it.skipIf(process.platform === 'win32')('is a no-op when the env switch is set to false', async () => {
     process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = 'false';
 
     const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
@@ -463,42 +485,138 @@ describe('#40 chroma-mcp orphan leak — the sweep kill path', () => {
     expect(signals).toEqual([]);
   });
 
-  // M3: an env var is not a usable safety valve for a detached daemon, so the
-  // switch must also be readable from ~/.claude-mem/settings.json. paths.ts
-  // freezes USER_SETTINGS_PATH under the test data dir (tests/preload.ts).
-  it.skipIf(process.platform === 'win32')('honours the settings.json kill-switch when no env var is set', async () => {
-    delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
-    const hadFile = existsSync(USER_SETTINGS_PATH);
-    const backup = hadFile ? readFileSync(USER_SETTINGS_PATH, 'utf-8') : null;
-    try {
-      writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'false' }));
+  // --- default OFF / opt-IN (the sweep must not run unless asked) ------------
+  //
+  // The sweep SIGKILLs machine-wide on a command-line match alone, so "nobody
+  // said anything" must mean OFF. These are the tests that pin that: each one
+  // is a way of saying nothing, and every one of them must leave `signals`
+  // empty. ROWS deliberately contains two matching orphans, so a regression to
+  // default-ON turns every one of them red rather than silently passing.
 
+  it.skipIf(process.platform === 'win32')('does NOT run when neither the env var nor the settings key is set', async () => {
+    delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
+    await withSettingsFile(JSON.stringify({ CLAUDE_MEM_CHROMA_ENABLED: 'true' }), async () => {
       const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
 
       expect(result.killed).toEqual([]);
       expect(signals).toEqual([]);
-    } finally {
-      if (backup !== null) writeFileSync(USER_SETTINGS_PATH, backup);
-      else rmSync(USER_SETTINGS_PATH, { force: true });
-    }
+    });
   });
 
-  it.skipIf(process.platform === 'win32')('defaults to ON when neither the env var nor the setting says otherwise', async () => {
+  it.skipIf(process.platform === 'win32')('does NOT run on a virgin install with no settings file at all', async () => {
     delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
-    const hadFile = existsSync(USER_SETTINGS_PATH);
-    const backup = hadFile ? readFileSync(USER_SETTINGS_PATH, 'utf-8') : null;
-    try {
-      // Deliberately corrupt: a settings read failure must fail to the DEFAULT
-      // (on), never crash and never silently disable the fix.
-      writeFileSync(USER_SETTINGS_PATH, '{ not json');
+    await withSettingsFile(null, async () => {
+      const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
+
+      expect(result.killed).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('does NOT run when the settings file is corrupt — a read failure fails CLOSED', async () => {
+    delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
+    await withSettingsFile('{ not json', async () => {
+      const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
+
+      expect(result.killed).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('does NOT run when the settings key is explicitly false', async () => {
+    delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
+    await withSettingsFile(JSON.stringify({ CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'false' }), async () => {
+      const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
+
+      expect(result.killed).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+  });
+
+  // 'true' is the ONE affirmative token (trimmed, case-folded), matching every
+  // other boolean setting in the codebase. Anything else fails safe to OFF —
+  // for a process-killing feature an unrecognised "yes" must not arm it.
+  it.skipIf(process.platform === 'win32')('does NOT treat 1 / yes / on / blank as an opt-in', async () => {
+    for (const value of ['1', 'yes', 'on', 'enabled', '   ', 'TRUE_ISH', 'false']) {
+      process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = value;
+      signals.length = 0;
 
       const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
 
-      expect(result.killed.sort((a, b) => a - b)).toEqual([5753, 5778]);
-    } finally {
-      if (backup !== null) writeFileSync(USER_SETTINGS_PATH, backup);
-      else rmSync(USER_SETTINGS_PATH, { force: true });
+      expect({ value, killed: result.killed, signals }).toEqual({ value, killed: [], signals: [] });
     }
+  });
+
+  it.skipIf(process.platform === 'win32')('accepts a trimmed, case-folded TRUE as the opt-in', async () => {
+    for (const value of ['true', ' true ', 'TRUE', 'True']) {
+      process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = value;
+      alive.clear();
+      signals.length = 0;
+
+      const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
+
+      expect({ value, killed: result.killed.sort((a, b) => a - b) }).toEqual({ value, killed: [5753, 5778] });
+    }
+  });
+
+  // --- explicit opt-in, and precedence --------------------------------------
+
+  // M3: an env var is not a usable control for a detached daemon (the successor
+  // worker inherits the OLD worker's environment), so the settings key is the
+  // real switch — it must be able to arm the sweep on its own.
+  it.skipIf(process.platform === 'win32')('runs when the settings key opts in, with no env var set', async () => {
+    delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
+    await withSettingsFile(JSON.stringify({ CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'true' }), async () => {
+      const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
+
+      expect(result.killed.sort((a, b) => a - b)).toEqual([5753, 5778]);
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('lets an explicit env var override the settings key in both directions', async () => {
+    await withSettingsFile(JSON.stringify({ CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'false' }), async () => {
+      process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = 'true';
+      expect((await sweepPosixChromaOrphansFrom(ROWS, 7127)).killed.sort((a, b) => a - b)).toEqual([5753, 5778]);
+    });
+
+    alive.clear();
+    signals.length = 0;
+
+    await withSettingsFile(JSON.stringify({ CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'true' }), async () => {
+      process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = 'false';
+      expect((await sweepPosixChromaOrphansFrom(ROWS, 7127)).killed).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+  });
+
+  // A blank env var is NOT an opt-in and is NOT an override — it falls through
+  // to the settings key, which is where the real switch lives.
+  it.skipIf(process.platform === 'win32')('falls through a blank env var to the settings key', async () => {
+    process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP = '';
+    await withSettingsFile(JSON.stringify({ CLAUDE_MEM_CHROMA_ORPHAN_SWEEP: 'true' }), async () => {
+      const result = await sweepPosixChromaOrphansFrom(ROWS, 7127);
+
+      expect(result.killed.sort((a, b) => a - b)).toEqual([5753, 5778]);
+    });
+  });
+
+  // The top-level entry point gates too, so a disabled sweep never forks `ps`.
+  it.skipIf(process.platform === 'win32')('gates sweepPosixChromaOrphans itself, not just the ...From helper', async () => {
+    delete process.env.CLAUDE_MEM_CHROMA_ORPHAN_SWEEP;
+    await withSettingsFile(JSON.stringify({}), async () => {
+      const result = await sweepPosixChromaOrphans(7127, ROWS);
+
+      expect(result.killed).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+  });
+});
+
+// The shipped default is itself part of the contract: nothing may quietly flip
+// it back by editing the DEFAULTS map alone.
+describe('#40 chroma-mcp orphan sweep — the shipped default', () => {
+  it('ships CLAUDE_MEM_CHROMA_ORPHAN_SWEEP as false', () => {
+    expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_CHROMA_ORPHAN_SWEEP).toBe('false');
   });
 });
 
